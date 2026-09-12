@@ -1,0 +1,452 @@
+--//==================== TP UP PRO ====================//--
+
+--//==================== SERVICES ====================//--
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+local Player = Players.LocalPlayer
+
+--//==================== SETTINGS ====================//--
+
+local Amount = 5
+local Step = 5
+
+--//==================== VARIABLES ====================//--
+
+local Gui
+local Main
+local OpenButton
+
+local Dragging = false
+local DragStart
+local StartPosition
+
+local ToggleDragging = false
+local ToggleMoved = false
+local ToggleDragStart
+local ToggleStartPosition
+
+--//==================== FUNCTIONS ====================//--
+
+local function Corner(Object, Radius)
+	local UI = Instance.new("UICorner")
+	UI.CornerRadius = UDim.new(0, Radius)
+	UI.Parent = Object
+end
+
+local function Stroke(Object, Color, Thickness, Transparency)
+	local UI = Instance.new("UIStroke")
+	UI.Color = Color
+	UI.Thickness = Thickness
+	UI.Transparency = Transparency or 0
+	UI.Parent = Object
+end
+
+local function SetAmount(Value)
+	Value = tonumber(Value)
+
+	if not Value then
+		return
+	end
+
+	Value = math.max(0, math.floor(Value))
+
+	Amount = Value
+
+	ValueLabel.Text = Amount .. " studs"
+	Input.Text = Amount
+end
+
+local function TeleportUp()
+	local Character = Player.Character
+	local Root = Character and Character:FindFirstChild("HumanoidRootPart")
+
+	if Root then
+		Root.CFrame = Root.CFrame + Vector3.new(0, Amount, 0)
+	end
+end
+
+local function Hover(Button, Normal, HoverColor)
+	Button.MouseEnter:Connect(function()
+		TweenService:Create(
+			Button,
+			TweenInfo.new(0.1),
+			{BackgroundColor3 = HoverColor}
+		):Play()
+	end)
+
+	Button.MouseLeave:Connect(function()
+		TweenService:Create(
+			Button,
+			TweenInfo.new(0.1),
+			{BackgroundColor3 = Normal}
+		):Play()
+	end)
+end
+
+--//==================== GUI ====================//--
+
+Gui = Instance.new("ScreenGui")
+Gui.Name = "TPUpPro"
+Gui.ResetOnSpawn = false
+Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+Gui.Parent = Player:WaitForChild("PlayerGui")
+
+--//==================== MAIN ====================//--
+
+Main = Instance.new("Frame")
+Main.Size = UDim2.fromOffset(320, 330)
+Main.Position = UDim2.new(0.5, -160, 0.5, -165)
+Main.BackgroundColor3 = Color3.fromRGB(19, 19, 24)
+Main.BorderSizePixel = 0
+Main.Parent = Gui
+
+Corner(Main, 14)
+Stroke(Main, Color3.fromRGB(58, 58, 70), 1, 0.15)
+
+--//==================== HEADER ====================//--
+
+local Header = Instance.new("Frame")
+Header.Size = UDim2.new(1, 0, 0, 48)
+Header.BackgroundColor3 = Color3.fromRGB(28, 28, 35)
+Header.BorderSizePixel = 0
+Header.Parent = Main
+
+Corner(Header, 14)
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -100, 1, 0)
+Title.Position = UDim2.fromOffset(16, 0)
+Title.BackgroundTransparency = 1
+Title.Text = "⬆  TP UP"
+Title.TextColor3 = Color3.fromRGB(245, 245, 250)
+Title.TextSize = 18
+Title.Font = Enum.Font.GothamBold
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = Header
+
+--//==================== CLOSE ====================//--
+
+local Close = Instance.new("TextButton")
+Close.Size = UDim2.fromOffset(34, 34)
+Close.Position = UDim2.new(1, -40, 0, 7)
+Close.BackgroundColor3 = Color3.fromRGB(45, 31, 36)
+Close.Text = "×"
+Close.TextColor3 = Color3.fromRGB(255, 110, 120)
+Close.TextSize = 21
+Close.Font = Enum.Font.GothamBold
+Close.Parent = Header
+
+Corner(Close, 8)
+
+Hover(
+	Close,
+	Color3.fromRGB(45, 31, 36),
+	Color3.fromRGB(65, 38, 45)
+)
+
+--//==================== DISTANCE ====================//--
+
+local DistanceTitle = Instance.new("TextLabel")
+DistanceTitle.Size = UDim2.new(1, -32, 0, 16)
+DistanceTitle.Position = UDim2.fromOffset(16, 61)
+DistanceTitle.BackgroundTransparency = 1
+DistanceTitle.Text = "DISTANCE"
+DistanceTitle.TextColor3 = Color3.fromRGB(125, 125, 140)
+DistanceTitle.TextSize = 10
+DistanceTitle.Font = Enum.Font.GothamBold
+DistanceTitle.TextXAlignment = Enum.TextXAlignment.Left
+DistanceTitle.Parent = Main
+
+ValueLabel = Instance.new("TextLabel")
+ValueLabel.Size = UDim2.new(1, -32, 0, 32)
+ValueLabel.Position = UDim2.fromOffset(16, 75)
+ValueLabel.BackgroundTransparency = 1
+ValueLabel.Text = "5 studs"
+ValueLabel.TextColor3 = Color3.fromRGB(100, 180, 255)
+ValueLabel.TextSize = 24
+ValueLabel.Font = Enum.Font.GothamBold
+ValueLabel.TextXAlignment = Enum.TextXAlignment.Left
+ValueLabel.Parent = Main
+
+--//==================== INPUT ====================//--
+
+Input = Instance.new("TextBox")
+Input.Size = UDim2.new(1, -32, 0, 38)
+Input.Position = UDim2.fromOffset(16, 112)
+Input.BackgroundColor3 = Color3.fromRGB(31, 31, 39)
+Input.BorderSizePixel = 0
+Input.Text = "5"
+Input.PlaceholderText = "Enter studs"
+Input.PlaceholderColor3 = Color3.fromRGB(100, 100, 110)
+Input.TextColor3 = Color3.fromRGB(240, 240, 245)
+Input.TextSize = 15
+Input.Font = Enum.Font.GothamMedium
+Input.ClearTextOnFocus = false
+Input.Parent = Main
+
+Corner(Input, 9)
+Stroke(Input, Color3.fromRGB(55, 55, 66), 1)
+
+Input.FocusLost:Connect(function()
+	SetAmount(Input.Text)
+end)
+
+--//==================== QUICK CONTROLS ====================//--
+
+local Minus = Instance.new("TextButton")
+Minus.Size = UDim2.fromOffset(45, 36)
+Minus.Position = UDim2.fromOffset(16, 158)
+Minus.BackgroundColor3 = Color3.fromRGB(35, 35, 43)
+Minus.Text = "−"
+Minus.TextColor3 = Color3.fromRGB(240, 240, 245)
+Minus.TextSize = 21
+Minus.Font = Enum.Font.GothamBold
+Minus.Parent = Main
+
+Corner(Minus, 8)
+
+local Plus = Instance.new("TextButton")
+Plus.Size = UDim2.fromOffset(45, 36)
+Plus.Position = UDim2.new(1, -61, 0, 158)
+Plus.BackgroundColor3 = Color3.fromRGB(35, 35, 43)
+Plus.Text = "+"
+Plus.TextColor3 = Color3.fromRGB(240, 240, 245)
+Plus.TextSize = 21
+Plus.Font = Enum.Font.GothamBold
+Plus.Parent = Main
+
+Corner(Plus, 8)
+
+Hover(
+	Minus,
+	Color3.fromRGB(35, 35, 43),
+	Color3.fromRGB(50, 50, 60)
+)
+
+Hover(
+	Plus,
+	Color3.fromRGB(35, 35, 43),
+	Color3.fromRGB(50, 50, 60)
+)
+
+Minus.MouseButton1Click:Connect(function()
+	SetAmount(Amount - Step)
+end)
+
+Plus.MouseButton1Click:Connect(function()
+	SetAmount(Amount + Step)
+end)
+
+--//==================== PRESETS ====================//--
+
+local PresetValues = {5, 10, 25, 50, 100, 500}
+
+local PresetTitle = Instance.new("TextLabel")
+PresetTitle.Size = UDim2.new(1, -32, 0, 15)
+PresetTitle.Position = UDim2.fromOffset(16, 202)
+PresetTitle.BackgroundTransparency = 1
+PresetTitle.Text = "PRESETS"
+PresetTitle.TextColor3 = Color3.fromRGB(115, 115, 130)
+PresetTitle.TextSize = 10
+PresetTitle.Font = Enum.Font.GothamBold
+PresetTitle.TextXAlignment = Enum.TextXAlignment.Left
+PresetTitle.Parent = Main
+
+for Index, Value in ipairs(PresetValues) do
+	local Button = Instance.new("TextButton")
+
+	Button.Size = UDim2.fromOffset(44, 28)
+	Button.Position = UDim2.fromOffset(
+		16 + ((Index - 1) * 48),
+		220
+	)
+
+	Button.BackgroundColor3 = Color3.fromRGB(32, 32, 40)
+	Button.Text = tostring(Value)
+	Button.TextColor3 = Color3.fromRGB(220, 220, 230)
+	Button.TextSize = 11
+	Button.Font = Enum.Font.GothamBold
+	Button.Parent = Main
+
+	Corner(Button, 7)
+
+	Hover(
+		Button,
+		Color3.fromRGB(32, 32, 40),
+		Color3.fromRGB(48, 48, 58)
+	)
+
+	Button.MouseButton1Click:Connect(function()
+		SetAmount(Value)
+	end)
+end
+
+--//==================== TELEPORT ====================//--
+
+local TPButton = Instance.new("TextButton")
+TPButton.Size = UDim2.new(1, -32, 0, 44)
+TPButton.Position = UDim2.fromOffset(16, 263)
+TPButton.BackgroundColor3 = Color3.fromRGB(65, 145, 235)
+TPButton.Text = "⬆  TELEPORT UP"
+TPButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+TPButton.TextSize = 15
+TPButton.Font = Enum.Font.GothamBold
+TPButton.Parent = Main
+
+Corner(TPButton, 9)
+
+Hover(
+	TPButton,
+	Color3.fromRGB(65, 145, 235),
+	Color3.fromRGB(82, 165, 255)
+)
+
+TPButton.MouseButton1Click:Connect(TeleportUp)
+
+--//==================== MAIN DRAG ====================//--
+
+Header.InputBegan:Connect(function(InputObject)
+	if InputObject.UserInputType == Enum.UserInputType.MouseButton1
+	or InputObject.UserInputType == Enum.UserInputType.Touch then
+
+		Dragging = true
+		DragStart = InputObject.Position
+		StartPosition = Main.Position
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(InputObject)
+	if not Dragging then
+		return
+	end
+
+	if InputObject.UserInputType ~= Enum.UserInputType.MouseMovement
+	and InputObject.UserInputType ~= Enum.UserInputType.Touch then
+		return
+	end
+
+	local Delta = InputObject.Position - DragStart
+
+	Main.Position = UDim2.new(
+		StartPosition.X.Scale,
+		StartPosition.X.Offset + Delta.X,
+		StartPosition.Y.Scale,
+		StartPosition.Y.Offset + Delta.Y
+	)
+end)
+
+UserInputService.InputEnded:Connect(function(InputObject)
+	if InputObject.UserInputType == Enum.UserInputType.MouseButton1
+	or InputObject.UserInputType == Enum.UserInputType.Touch then
+
+		Dragging = false
+	end
+end)
+
+--//==================== TOGGLE ====================//--
+
+OpenButton = Instance.new("TextButton")
+OpenButton.Size = UDim2.fromOffset(118, 38)
+OpenButton.Position = UDim2.fromOffset(18, 180)
+OpenButton.BackgroundColor3 = Color3.fromRGB(27, 27, 34)
+OpenButton.Text = "⬆  TP UP"
+OpenButton.TextColor3 = Color3.fromRGB(100, 180, 255)
+OpenButton.TextSize = 13
+OpenButton.Font = Enum.Font.GothamBold
+OpenButton.AutoButtonColor = false
+OpenButton.Visible = false
+OpenButton.Parent = Gui
+
+Corner(OpenButton, 9)
+Stroke(OpenButton, Color3.fromRGB(60, 60, 72), 1, 0.2)
+
+--//==================== TOGGLE DRAG ====================//--
+
+OpenButton.InputBegan:Connect(function(InputObject)
+	if InputObject.UserInputType == Enum.UserInputType.MouseButton1
+	or InputObject.UserInputType == Enum.UserInputType.Touch then
+
+		ToggleDragging = true
+		ToggleMoved = false
+		ToggleDragStart = InputObject.Position
+		ToggleStartPosition = OpenButton.Position
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(InputObject)
+	if not ToggleDragging then
+		return
+	end
+
+	if InputObject.UserInputType ~= Enum.UserInputType.MouseMovement
+	and InputObject.UserInputType ~= Enum.UserInputType.Touch then
+		return
+	end
+
+	local Delta = InputObject.Position - ToggleDragStart
+
+	if math.abs(Delta.X) > 5 or math.abs(Delta.Y) > 5 then
+		ToggleMoved = true
+	end
+
+	OpenButton.Position = UDim2.new(
+		ToggleStartPosition.X.Scale,
+		ToggleStartPosition.X.Offset + Delta.X,
+		ToggleStartPosition.Y.Scale,
+		ToggleStartPosition.Y.Offset + Delta.Y
+	)
+end)
+
+UserInputService.InputEnded:Connect(function(InputObject)
+	if InputObject.UserInputType == Enum.UserInputType.MouseButton1
+	or InputObject.UserInputType == Enum.UserInputType.Touch then
+
+		if ToggleDragging and not ToggleMoved then
+			Main.Visible = true
+			OpenButton.Visible = false
+		end
+
+		ToggleDragging = false
+		ToggleMoved = false
+	end
+end)
+
+--//==================== MINIMIZE ====================//--
+
+local Minimize = Instance.new("TextButton")
+Minimize.Size = UDim2.fromOffset(34, 34)
+Minimize.Position = UDim2.new(1, -78, 0, 7)
+Minimize.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
+Minimize.Text = "—"
+Minimize.TextColor3 = Color3.fromRGB(220, 220, 230)
+Minimize.TextSize = 18
+Minimize.Font = Enum.Font.GothamBold
+Minimize.Parent = Header
+
+Corner(Minimize, 8)
+
+Hover(
+	Minimize,
+	Color3.fromRGB(40, 40, 48),
+	Color3.fromRGB(55, 55, 65)
+)
+
+Minimize.MouseButton1Click:Connect(function()
+	Main.Visible = false
+	OpenButton.Visible = true
+end)
+
+--//==================== CLOSE ====================//--
+
+Close.MouseButton1Click:Connect(function()
+	Gui:Destroy()
+end)
+
+--//==================== START ====================//--
+
+SetAmount(5)
+
+--//==================== END ====================//--
