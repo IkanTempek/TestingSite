@@ -1,0 +1,2284 @@
+--[[  TAS Pro v3.7.0  ]]
+---------- SERVICES ----------
+local Players    = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS        = game:GetService("UserInputService")
+local Http       = game:GetService("HttpService")
+local TS         = game:GetService("TweenService")
+local Lighting   = game:GetService("Lighting")
+
+local plr = Players.LocalPlayer
+local cam = workspace.CurrentCamera
+
+---------- CONFIG ----------
+local PLACE_DIR     = "TAS/"..tostring(game.PlaceId)
+local SETTINGS_FILE = "TAS/settings.json"
+local CFG = {
+    FPS=60, DIR=PLACE_DIR.."/", MAN=PLACE_DIR.."/manifest.json",
+    SPEEDS={0.1,0.25,0.5,0.75,1,1.5,2,3,4,8}, DEF_SPD=5,
+    SLOW_FACTS={0.1,0.25,0.5,0.75,1.0}, DEF_SLOW=3, W=272,
+}
+local DT=1/CFG.FPS
+local hasFile=type(writefile)=="function" and type(readfile)=="function"
+local MAX_UNDO=12
+local TRAIL_DOT_DIST=0.6; local TRAIL_LINE_R=0.07; local TRAIL_DOT_R=0.18
+
+local CFG_PANEL_SIZES = {
+    small  = {w=232, h=340},
+    medium = {w=252, h=500},
+    large  = {w=286, h=660},
+}
+
+---------- PALETTE ----------
+local P={
+    bg=Color3.fromRGB(18,18,28), bar=Color3.fromRGB(28,28,42),
+    btn=Color3.fromRGB(42,42,62), acc=Color3.fromRGB(75,110,245),
+    rec=Color3.fromRGB(235,45,45), recP=Color3.fromRGB(200,120,30),
+    play=Color3.fromRGB(40,190,90), pause=Color3.fromRGB(240,175,30),
+    stop=Color3.fromRGB(180,55,55), txt=Color3.fromRGB(215,215,225),
+    dim=Color3.fromRGB(110,110,130), tabA=Color3.fromRGB(55,70,150),
+    togOn=Color3.fromRGB(50,170,75), togOff=Color3.fromRGB(55,55,75),
+    slBg=Color3.fromRGB(32,32,48), slFl=Color3.fromRGB(75,110,245),
+    ckpt=Color3.fromRGB(255,210,0), warn=Color3.fromRGB(255,120,80),
+    undoOn=Color3.fromRGB(60,60,95), undoOff=Color3.fromRGB(26,26,38),
+    ytRed=Color3.fromRGB(255,30,30), closeR=Color3.fromRGB(200,45,45),
+    credBg=Color3.fromRGB(12,10,24), slow=Color3.fromRGB(50,160,200),
+    auto=Color3.fromRGB(165,110,255), camGuide=Color3.fromRGB(110,240,255),
+    focus=Color3.fromRGB(255,120,220), safe=Color3.fromRGB(80,220,160),
+}
+
+---------- APP SETTINGS ----------
+local AS={
+    saveState=false, draggable=true,
+    mainPosXS=0.5, mainPosXO=-CFG.W/2, mainPosYS=0, mainPosYO=60,
+    stAnim=true, stCamR=false, stGhost=false, stLoop=false, stTrail=false,
+    stHidePlayers=false, stSpdI=CFG.DEF_SPD,
+    slowRecEnabled=false, slowRecI=CFG.DEF_SLOW, slowRecCam=false,
+    recContinue=false,
+    togBtnXS=1, togBtnXO=-52, togBtnYS=0, togBtnYO=50,
+    ghostType="emoji",
+
+    autoCkpt=false,
+    autoCkptEvery=60,
+    snapToCkpt=true,
+    autoTrailRefresh=true,
+    stopAtCheckpoint=false,
+    playbackFrameBlend=false,
+    camGuide=true,
+    notifyFrameMilestones=true,
+
+    stHoldPose=true,
+    stShowVelocity=false,
+    stAutoSave=false,
+    stAutoSaveEvery=300,
+    stCinematicBars=false,
+    stCameraFOVLock=false,
+    stCameraFOV=70,
+    stShowStats=true,
+    stFocusMode=false,
+    stFreezeLighting=false,
+    stAutoNameCheckpoints=true,
+
+    cfgSize="medium",
+}
+local function loadAS()
+    if not hasFile then return end
+    local ok,raw=pcall(readfile,SETTINGS_FILE); if not ok or not raw then return end
+    local ok2,d=pcall(function() return Http:JSONDecode(raw) end); if not ok2 or not d then return end
+    for k,v in pairs(d) do if v~=nil then AS[k]=v end end
+    local function ci(k,lo,hi,def)
+        local v=AS[k]
+        if type(v)~="number" then AS[k]=def else AS[k]=math.clamp(math.floor(v),lo,hi) end
+    end
+    ci("stSpdI",1,#CFG.SPEEDS,CFG.DEF_SPD)
+    ci("slowRecI",1,#CFG.SLOW_FACTS,CFG.DEF_SLOW)
+    ci("autoCkptEvery",15,600,60)
+    ci("stAutoSaveEvery",60,1800,300)
+    ci("stCameraFOV",40,120,70)
+    if type(AS.cfgSize)~="string" or not CFG_PANEL_SIZES[AS.cfgSize] then AS.cfgSize="medium" end
+end
+local function saveAS()
+    if not hasFile then return end
+    pcall(function() makefolder("TAS") end)
+    pcall(writefile,SETTINGS_FILE,Http:JSONEncode(AS))
+end
+loadAS()
+
+---------- UTILITIES ----------
+local function sCF(c) return {c:GetComponents()} end
+local function dCF(t) return CFrame.new(table.unpack(t)) end
+local function sV3(v) return {v.X,v.Y,v.Z} end
+local function dV3(t) return Vector3.new(t[1] or 0,t[2] or 0,t[3] or 0) end
+local function I(cls,pr)
+    local o=Instance.new(cls)
+    for k,v in pairs(pr) do if k~="Parent" then pcall(function() o[k]=v end) end end
+    if pr.Parent then o.Parent=pr.Parent end
+    return o
+end
+local function getChar()
+    local c=plr.Character; if not c then return end
+    local h=c:FindFirstChild("HumanoidRootPart")
+    local hu=c:FindFirstChildOfClass("Humanoid")
+    local an=hu and hu:FindFirstChildOfClass("Animator")
+    return c,h,hu,an
+end
+local function deepCopy(t)
+    if type(t)~="table" then return t end
+    local c={}
+    for k,v in pairs(t) do c[deepCopy(k)]=deepCopy(v) end
+    return c
+end
+local function hasValue(arr,val)
+    for _,v in ipairs(arr or {}) do if v==val then return true end end
+    return false
+end
+local function fmtSec(sec) return ("%.2f"):format(sec).."s" end
+
+local mapName="Unknown"
+pcall(function()
+    mapName=game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name
+end)
+
+---------- STATE ----------
+local S={
+    mode="idle", slots={}, slot=1, frame=0,
+    spdI=(AS.saveState and AS.stSpdI or CFG.DEF_SPD), acc=0, rAcc=0,
+    anim=(AS.saveState and AS.stAnim or true), camR=(AS.saveState and AS.stCamR or false),
+    ghost=(AS.saveState and AS.stGhost or false), loop=(AS.saveState and AS.stLoop or false),
+    trail=(AS.saveState and AS.stTrail or false),
+    aC={}, gPart=nil, gClone=nil, gBuildType=nil, gF=0, gA=0, tFolder=nil,
+    sWS=16, sJP=50, uiOpen=true, ckptParts={},
+    seekMarker=nil, seekLine=nil, seekText=nil,
+    saveConfirmOpen=false, loadConfirmOpen=false, cfgOpen=false,
+    hidingPlayers=(AS.saveState and AS.stHidePlayers or false),
+    slowRec=(AS.slowRecEnabled or false), slowRecI=(AS.slowRecI or CFG.DEF_SLOW),
+    slowRecCam=(AS.slowRecCam or false), recContinue=(AS.recContinue or false),
+    ghostType=(AS.ghostType or "emoji"),
+    slowAtt=nil, slowVF=nil,
+
+    addFramePending=false, addFrameAcc=0,
+
+    autoCkpt=(AS.autoCkpt or false),
+    autoCkptEvery=(AS.autoCkptEvery or 60),
+    snapToCkpt=(AS.snapToCkpt ~= false),
+    autoTrailRefresh=(AS.autoTrailRefresh ~= false),
+    stopAtCheckpoint=(AS.stopAtCheckpoint or false),
+    playbackFrameBlend=(AS.playbackFrameBlend or false),
+    camGuide=(AS.camGuide ~= false),
+    notifyFrameMilestones=(AS.notifyFrameMilestones ~= false),
+    lastMilestone=0,
+    camGuideFolder=nil,
+
+    holdPose=(AS.stHoldPose ~= false),
+    showVelocity=(AS.stShowVelocity or false),
+    autoSave=(AS.stAutoSave or false),
+    autoSaveEvery=(AS.stAutoSaveEvery or 300),
+    autoSaveAcc=0,
+    cinematicBars=(AS.stCinematicBars or false),
+    cameraFOVLock=(AS.stCameraFOVLock or false),
+    cameraFOV=(AS.stCameraFOV or 70),
+    showStats=(AS.stShowStats ~= false),
+    focusMode=(AS.stFocusMode or false),
+    freezeLighting=(AS.stFreezeLighting or false),
+    autoNameCheckpoints=(AS.stAutoNameCheckpoints ~= false),
+
+    velFolder=nil,
+    statsText=nil,
+    topBar=nil,
+    bottomBar=nil,
+    frozenLighting=nil,
+}
+if type(S.spdI)~="number" or S.spdI<1 or S.spdI>#CFG.SPEEDS then S.spdI=CFG.DEF_SPD end
+if type(S.slowRecI)~="number" or S.slowRecI<1 or S.slowRecI>#CFG.SLOW_FACTS then S.slowRecI=CFG.DEF_SLOW end
+S.autoCkptEvery=math.clamp(math.floor(tonumber(S.autoCkptEvery) or 60),15,600)
+S.autoSaveEvery=math.clamp(math.floor(tonumber(S.autoSaveEvery) or 300),60,1800)
+S.cameraFOV=math.clamp(math.floor(tonumber(S.cameraFOV) or 70),40,120)
+
+local function spd() return CFG.SPEEDS[S.spdI] or 1 end
+local function sf() return CFG.SLOW_FACTS[S.slowRecI] or 0.5 end
+local function sl() return S.slots[S.slot] end
+local function fc() local s=sl(); return s and #s.frames or 0 end
+
+local function newSlot(nm)
+    return {
+        name=nm or ("Slot "..(#S.slots+1)),
+        frames={},
+        checkpoints={},
+        checkpointNames={},
+        meta={pid=game.PlaceId,map=mapName,fps=CFG.FPS,ts=os.time()},
+        dirty=false,lastSavedHash=nil,undoStack={},redoStack={},
+    }
+end
+S.slots[1]=newSlot("Slot 1")
+
+local function slotHash(s)
+    local ok,r=pcall(function()
+        return Http:JSONEncode({
+            n=s.name,m=s.meta,f=s.frames,c=s.checkpoints or{},cn=s.checkpointNames or{}
+        })
+    end)
+    return ok and r or ""
+end
+local function markDirty(v) local s=sl(); if s then s.dirty=(v~=false) end end
+local function refreshDirty()
+    local s=sl(); if not s then return end
+    if not s.lastSavedHash then
+        s.dirty=(#s.frames>0) or (#(s.checkpoints or {})>0)
+        return
+    end
+    s.dirty=(slotHash(s)~=s.lastSavedHash)
+end
+local function pushUndo()
+    local s=sl(); if not s then return end
+    if not s.undoStack then s.undoStack={} end
+    if not s.redoStack then s.redoStack={} end
+    s.undoStack[#s.undoStack+1]={
+        frames=deepCopy(s.frames),
+        checkpoints=deepCopy(s.checkpoints or {}),
+        checkpointNames=deepCopy(s.checkpointNames or {}),
+        frame=S.frame
+    }
+    while #s.undoStack>MAX_UNDO do table.remove(s.undoStack,1) end
+    s.redoStack={}
+end
+
+---------- NOTIFICATION ----------
+local nLbl,nTw
+local function notify(m,c)
+    if not nLbl then return end
+    nLbl.Text=m
+    nLbl.TextColor3=c or P.txt
+    if nTw then nTw:Cancel() end
+    nLbl.TextTransparency=0
+    nTw=TS:Create(nLbl,TweenInfo.new(4,Enum.EasingStyle.Quad,Enum.EasingDirection.In),{TextTransparency=0.6})
+    nTw:Play()
+end
+
+---------- FEATURE HELPERS ----------
+local function saveFeatStates()
+    if not AS.saveState then return end
+    AS.stAnim=S.anim
+    AS.stCamR=S.camR
+    AS.stGhost=S.ghost
+    AS.stLoop=S.loop
+    AS.stTrail=S.trail
+    AS.stHidePlayers=S.hidingPlayers
+    AS.stSpdI=S.spdI
+    AS.slowRecEnabled=S.slowRec
+    AS.slowRecI=S.slowRecI
+    AS.slowRecCam=S.slowRecCam
+    AS.recContinue=S.recContinue
+    AS.ghostType=S.ghostType
+
+    AS.autoCkpt=S.autoCkpt
+    AS.autoCkptEvery=S.autoCkptEvery
+    AS.snapToCkpt=S.snapToCkpt
+    AS.autoTrailRefresh=S.autoTrailRefresh
+    AS.stopAtCheckpoint=S.stopAtCheckpoint
+    AS.playbackFrameBlend=S.playbackFrameBlend
+    AS.camGuide=S.camGuide
+    AS.notifyFrameMilestones=S.notifyFrameMilestones
+
+    AS.stHoldPose=S.holdPose
+    AS.stShowVelocity=S.showVelocity
+    AS.stAutoSave=S.autoSave
+    AS.stAutoSaveEvery=S.autoSaveEvery
+    AS.stCinematicBars=S.cinematicBars
+    AS.stCameraFOVLock=S.cameraFOVLock
+    AS.stCameraFOV=S.cameraFOV
+    AS.stShowStats=S.showStats
+    AS.stFocusMode=S.focusMode
+    AS.stFreezeLighting=S.freezeLighting
+    AS.stAutoNameCheckpoints=S.autoNameCheckpoints
+
+    saveAS()
+end
+
+local function nearestCheckpointIndex(frameIdx)
+    local s=sl(); if not s or not s.checkpoints or #s.checkpoints==0 then return nil end
+    local best=nil; local bestDist=math.huge
+    for _,fi in ipairs(s.checkpoints) do
+        local d=math.abs(fi-frameIdx)
+        if d<bestDist then bestDist=d; best=fi end
+    end
+    return best
+end
+
+local function maybeMilestoneNotify()
+    if not S.notifyFrameMilestones then return end
+    local f=S.frame
+    if f>=60 and f%60==0 and f~=S.lastMilestone then
+        S.lastMilestone=f
+        notify("Frame "..f.." / "..("%.2f"):format(f*DT).."s",P.auto)
+    end
+end
+
+local function checkpointLabel(fi,idx)
+    local s=sl()
+    if not s then return tostring(idx or "?") end
+    if s.checkpointNames and s.checkpointNames[tostring(fi)] then
+        return s.checkpointNames[tostring(fi)]
+    end
+    return tostring(idx or "?")
+end
+
+---------- SLOW GRAVITY ----------
+local function removeSlowGravity()
+    if S.slowVF then pcall(function() S.slowVF:Destroy() end); S.slowVF=nil end
+    if S.slowAtt then pcall(function() S.slowAtt:Destroy() end); S.slowAtt=nil end
+end
+local function applySlowGravity()
+    removeSlowGravity()
+    local c,h=getChar(); if not c or not h then return end
+    local factor=sf(); if factor>=1 then return end
+    local mass=0
+    for _,p in ipairs(c:GetDescendants()) do
+        if p:IsA("BasePart") then mass=mass+p:GetMass() end
+    end
+    if mass<=0 then return end
+    local att=Instance.new("Attachment"); att.Name="TAS_SGAtt"; att.Parent=h
+    local vf=Instance.new("VectorForce"); vf.Name="TAS_SGForce"; vf.Attachment0=att
+    vf.RelativeTo=Enum.ActuatorRelativeTo.World
+    vf.Force=Vector3.new(0,mass*workspace.Gravity*(1-factor),0)
+    vf.Parent=h
+    S.slowAtt=att
+    S.slowVF=vf
+end
+local function refreshSlowGravity()
+    if S.mode~="recording" and S.mode~="rec_paused" then return end
+    if not S.slowRec then removeSlowGravity() else applySlowGravity() end
+end
+
+---------- ANIMATIONS ----------
+local function capAnims()
+    local _,_,_,an=getChar(); if not an then return {} end
+    local r={}
+    local factor=(S.mode=="recording" and S.slowRec) and sf() or 1
+    pcall(function()
+        for _,t in ipairs(an:GetPlayingAnimationTracks()) do
+            if t.Animation then
+                r[#r+1]={
+                    id=t.Animation.AnimationId,
+                    sp=(factor>0) and (t.Speed/factor) or t.Speed,
+                    wt=t.WeightCurrent,
+                    tp=t.TimePosition
+                }
+            end
+        end
+    end)
+    return r
+end
+local function clearAC()
+    for _,t in pairs(S.aC) do pcall(function() t:Stop(0); t:Destroy() end) end
+    S.aC={}
+end
+local function stopPAnims()
+    local _,_,_,an=getChar(); if not an then return end
+    pcall(function() for _,t in ipairs(an:GetPlayingAnimationTracks()) do t:Stop(0) end end)
+end
+local function getTrack(an,id)
+    local t=S.aC[id]
+    if t then
+        local ok,v=pcall(function() return t.Animation end)
+        if ok and v then return t end
+        S.aC[id]=nil
+    end
+    local a=Instance.new("Animation"); a.AnimationId=id
+    local ok,tr=pcall(function() return an:LoadAnimation(a) end)
+    if ok and tr then
+        tr.Priority=Enum.AnimationPriority.Action4
+        S.aC[id]=tr
+        return tr
+    end
+end
+local function applyAnims(anims,paused)
+    if not S.anim then return end
+    local _,_,_,an=getChar(); if not an then return end
+    local need={}
+    local ps=paused and 0 or spd()
+    for _,a in ipairs(anims or {}) do
+        need[a.id]=true
+        local t=getTrack(an,a.id)
+        if t then
+            pcall(function()
+                if not t.IsPlaying then t:Play(0,a.wt,0) end
+                t:AdjustSpeed(a.sp*ps)
+                t:AdjustWeight(a.wt,0)
+                t.TimePosition=a.tp
+            end)
+        end
+    end
+    for id,t in pairs(S.aC) do
+        if not need[id] then pcall(function() if t.IsPlaying then t:Stop(0) end end) end
+    end
+end
+
+---------- RESTORE ----------
+local function restoreCharacter()
+    local _,h,hu=getChar()
+    if hu then hu.WalkSpeed=S.sWS; hu.JumpPower=S.sJP end
+    if h then
+        h.AssemblyLinearVelocity=Vector3.zero
+        h.AssemblyAngularVelocity=Vector3.zero
+    end
+    if S.camR then cam.CameraType=Enum.CameraType.Custom end
+    task.delay(0.05,function()
+        if S.mode~="idle" then return end
+        local _,_,hu2=getChar()
+        if hu2 then pcall(function() hu2:ChangeState(Enum.HumanoidStateType.Running) end) end
+    end)
+end
+
+---------- FRAME CAPTURE / APPLY ----------
+local function capFrame()
+    local c,h,hu=getChar(); if not c or not h or not hu then return end
+    local f={
+        cf=sCF(h.CFrame),
+        v=sV3(h.AssemblyLinearVelocity),
+        ws=hu.WalkSpeed,
+        jp=hu.JumpPower,
+        st=hu:GetState().Value,
+        an=capAnims()
+    }
+    local tl=c:FindFirstChildOfClass("Tool")
+    if tl then f.tl=tl.Name end
+    if S.camR and not (S.slowRec and not S.slowRecCam) then f.cm=sCF(cam.CFrame) end
+    return f
+end
+
+local function applyFrame(idx,paused)
+    local s=sl(); if not s or not s.frames[idx] then return end
+    local f=s.frames[idx]
+    local c,h,hu=getChar(); if not c or not h or not hu then return end
+
+    if S.playbackFrameBlend and idx>1 and s.frames[idx-1] and not paused then
+        local prev=dCF(s.frames[idx-1].cf)
+        local cur=dCF(f.cf)
+        h.CFrame=prev:Lerp(cur,0.5)
+    else
+        h.CFrame=dCF(f.cf)
+    end
+
+    h.AssemblyLinearVelocity=Vector3.zero
+    h.AssemblyAngularVelocity=Vector3.zero
+
+    if S.holdPose then
+        hu.WalkSpeed=0; hu.JumpPower=0
+        pcall(function() hu:ChangeState(Enum.HumanoidStateType.Physics) end)
+    else
+        hu.WalkSpeed=f.ws or 0
+        hu.JumpPower=f.jp or 0
+    end
+
+    applyAnims(f.an,paused)
+    if S.camR and f.cm then
+        cam.CameraType=Enum.CameraType.Scriptable
+        cam.CFrame=dCF(f.cm)
+    end
+end
+
+---------- CHECKPOINT MARKERS ----------
+local function clearCkptParts()
+    for _,p in ipairs(S.ckptParts) do pcall(function() p:Destroy() end) end
+    S.ckptParts={}
+end
+local function spawnCkptMarker(pos,label)
+    local p=I("Part",{
+        Name="TAS_Ckpt",Size=Vector3.new(0.6,0.6,0.6),Shape=Enum.PartType.Ball,
+        Position=pos+Vector3.new(0,2.8,0),Anchored=true,CanCollide=false,CanTouch=false,CanQuery=false,
+        Material=Enum.Material.Neon,CastShadow=false,Color=P.ckpt,Transparency=0,Parent=workspace
+    })
+    local bb=I("BillboardGui",{Size=UDim2.new(0,78,0,36),StudsOffset=Vector3.new(0,1.4,0),AlwaysOnTop=true,Parent=p})
+    I("TextLabel",{
+        Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text="★"..(label or ""),
+        TextScaled=true,TextColor3=P.ckpt,Font=Enum.Font.GothamBold,Parent=bb
+    })
+    S.ckptParts[#S.ckptParts+1]=p
+end
+local function refreshCkptMarkers()
+    clearCkptParts()
+    if not S.trail then return end
+    local s=sl(); if not s then return end
+    for i,fi in ipairs(s.checkpoints or {}) do
+        local f=s.frames[fi]
+        if f then spawnCkptMarker(dCF(f.cf).Position,checkpointLabel(fi,i)) end
+    end
+end
+local function addCheckpointAtFrame(fi,quiet)
+    local s=sl(); if not s or fi<1 or fi>#s.frames then return false end
+    s.checkpoints=s.checkpoints or {}
+    s.checkpointNames=s.checkpointNames or {}
+    if hasValue(s.checkpoints,fi) then return false end
+    s.checkpoints[#s.checkpoints+1]=fi
+    table.sort(s.checkpoints)
+    if S.autoNameCheckpoints and not s.checkpointNames[tostring(fi)] then
+        s.checkpointNames[tostring(fi)]="F"..fi
+    end
+    markDirty(true)
+    if S.trail then refreshCkptMarkers() end
+    if not quiet then notify("Checkpoint F"..fi,P.ckpt) end
+    return true
+end
+
+---------- SEEK MARKER ----------
+local function clearSeekMarker()
+    if S.seekMarker then pcall(function() S.seekMarker:Destroy() end); S.seekMarker=nil end
+    if S.seekLine then pcall(function() S.seekLine:Destroy() end); S.seekLine=nil end
+end
+local function ensureSeekMarker()
+    if S.seekMarker and S.seekLine then return end
+    S.seekMarker=I("Part",{
+        Name="TAS_SeekMark",Size=Vector3.new(0.42,0.42,0.42),Shape=Enum.PartType.Ball,
+        Anchored=true,CanCollide=false,CanTouch=false,CanQuery=false,Material=Enum.Material.Neon,
+        CastShadow=false,Color=Color3.fromRGB(90,220,255),Transparency=0,Parent=workspace
+    })
+    S.seekLine=I("Part",{
+        Name="TAS_SeekLine",Size=Vector3.new(0.12,2.2,0.12),
+        Anchored=true,CanCollide=false,CanTouch=false,CanQuery=false,Material=Enum.Material.Neon,
+        CastShadow=false,Color=Color3.fromRGB(90,220,255),Transparency=0.1,Parent=workspace
+    })
+    local bb=I("BillboardGui",{Size=UDim2.new(0,84,0,24),StudsOffset=Vector3.new(0,1.2,0),AlwaysOnTop=true,Parent=S.seekMarker})
+    S.seekText=I("TextLabel",{
+        Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text="F1",
+        TextScaled=true,TextColor3=Color3.fromRGB(180,245,255),Font=Enum.Font.GothamBold,Parent=bb
+    })
+end
+local function updateSeekMarker()
+    local s=sl()
+    if not S.trail or not s or #s.frames==0 or S.frame<1 or not s.frames[S.frame] then
+        clearSeekMarker()
+        return
+    end
+    ensureSeekMarker()
+    local pos=dCF(s.frames[S.frame].cf).Position
+    S.seekMarker.Position=pos+Vector3.new(0,0.15,0)
+    S.seekLine.CFrame=CFrame.new(pos+Vector3.new(0,1.3,0))
+    if S.seekText then
+        local isCk=hasValue(s.checkpoints or {},S.frame)
+        local tag=""
+        if isCk then
+            local idx=1
+            for i,fi in ipairs(s.checkpoints or {}) do if fi==S.frame then idx=i break end end
+            tag="★ "..checkpointLabel(S.frame,idx).." "
+        end
+        S.seekText.Text=tag.."F"..tostring(S.frame)
+    end
+end
+
+---------- CAMERA GUIDE ----------
+local function clearCamGuide()
+    if S.camGuideFolder then pcall(function() S.camGuideFolder:Destroy() end); S.camGuideFolder=nil end
+end
+local function refreshCamGuide()
+    clearCamGuide()
+    if not S.camGuide or not S.camR or not S.trail then return end
+    local s=sl(); if not s or #s.frames<2 then return end
+    local fo=I("Folder",{Name="TAS_CamGuide",Parent=workspace}); S.camGuideFolder=fo
+
+    local last=nil
+    for i=1,#s.frames do
+        local f=s.frames[i]
+        if f and f.cm then
+            local cf=dCF(f.cm)
+            local pos=cf.Position
+            if not last or (pos-last).Magnitude>=2.5 then
+                I("Part",{
+                    Size=Vector3.new(0.22,0.22,0.22),Shape=Enum.PartType.Ball,Position=pos,
+                    Anchored=true,CanCollide=false,CanTouch=false,CanQuery=false,Material=Enum.Material.Neon,
+                    Color=P.camGuide,Transparency=0.2,CastShadow=false,Parent=fo
+                })
+                if last then
+                    local dist=(pos-last).Magnitude
+                    if dist>0.05 then
+                        local mid=(pos+last)*0.5
+                        I("Part",{
+                            Size=Vector3.new(0.08,0.08,dist),CFrame=CFrame.new(mid,pos),
+                            Anchored=true,CanCollide=false,CanTouch=false,CanQuery=false,Material=Enum.Material.Neon,
+                            Color=P.camGuide,Transparency=0.55,CastShadow=false,Parent=fo
+                        })
+                    end
+                end
+                last=pos
+            end
+        end
+    end
+end
+
+---------- VELOCITY GUIDE ----------
+local function clearVelGuide()
+    if S.velFolder then pcall(function() S.velFolder:Destroy() end); S.velFolder=nil end
+end
+local function refreshVelGuide()
+    clearVelGuide()
+    if not S.showVelocity or not S.trail then return end
+    local s=sl(); if not s or #s.frames<2 then return end
+    local fo=I("Folder",{Name="TAS_VelGuide",Parent=workspace}); S.velFolder=fo
+    for i=1,#s.frames,2 do
+        local f=s.frames[i]
+        if f and f.v then
+            local pos=dCF(f.cf).Position + Vector3.new(0,1,0)
+            local v=dV3(f.v)
+            local mag=v.Magnitude
+            if mag>0.25 then
+                local dir=v.Unit
+                local len=math.clamp(mag*0.06,0.5,4)
+                local tip=pos + dir*len
+                local mid=(pos+tip)*0.5
+                I("Part",{
+                    Size=Vector3.new(0.06,0.06,(tip-pos).Magnitude),
+                    CFrame=CFrame.new(mid,tip),
+                    Anchored=true,CanCollide=false,CanTouch=false,CanQuery=false,
+                    Material=Enum.Material.Neon,Color=P.safe,Transparency=0.35,CastShadow=false,Parent=fo
+                })
+            end
+        end
+    end
+end
+
+---------- CINEMATIC BARS ----------
+local function refreshBars()
+    if not S.topBar or not S.bottomBar then return end
+    S.topBar.Visible=S.cinematicBars
+    S.bottomBar.Visible=S.cinematicBars
+end
+
+---------- FOCUS MODE ----------
+local main, cfgPanel
+
+local function applyFocusMode(on)
+    local targets={main,cfgPanel}
+    for _,obj in ipairs(targets) do
+        if obj then
+            obj.BackgroundTransparency=on and 0.08 or 0
+        end
+    end
+end
+
+---------- LIGHTING FREEZE ----------
+local function captureLighting()
+    S.frozenLighting={
+        ClockTime=Lighting.ClockTime,
+        Brightness=Lighting.Brightness,
+        Ambient=Lighting.Ambient,
+        OutdoorAmbient=Lighting.OutdoorAmbient,
+        FogEnd=Lighting.FogEnd,
+        FogStart=Lighting.FogStart,
+        FogColor=Lighting.FogColor,
+        ExposureCompensation=Lighting.ExposureCompensation,
+    }
+end
+local function applyFrozenLighting()
+    if not S.freezeLighting or not S.frozenLighting then return end
+    local d=S.frozenLighting
+    pcall(function()
+        Lighting.ClockTime=d.ClockTime
+        Lighting.Brightness=d.Brightness
+        Lighting.Ambient=d.Ambient
+        Lighting.OutdoorAmbient=d.OutdoorAmbient
+        Lighting.FogEnd=d.FogEnd
+        Lighting.FogStart=d.FogStart
+        Lighting.FogColor=d.FogColor
+        Lighting.ExposureCompensation=d.ExposureCompensation
+    end)
+end
+
+---------- RECORDING ----------
+local function startRec()
+    if not getChar() then notify("No character",P.rec); return end
+    local s=sl()
+    pushUndo()
+    local isContinue=(#s.frames>0) and (S.frame>0) and (S.frame<#s.frames)
+    if isContinue then
+        for i=#s.frames,S.frame+1,-1 do table.remove(s.frames,i) end
+        if s.checkpoints then
+            for i=#s.checkpoints,1,-1 do
+                if s.checkpoints[i]>=S.frame then
+                    s.checkpointNames[tostring(s.checkpoints[i])]=nil
+                    table.remove(s.checkpoints,i)
+                end
+            end
+            s.checkpoints[#s.checkpoints+1]=S.frame
+            if S.autoNameCheckpoints then s.checkpointNames[tostring(S.frame)]="Branch" end
+            refreshCkptMarkers()
+        end
+        notify("Rec continue from F"..S.frame,P.ckpt)
+        markDirty(true)
+    elseif S.frame<=0 then
+        s.frames={}
+        s.checkpoints={}
+        s.checkpointNames={}
+        clearCkptParts()
+        markDirty(true)
+    end
+    S.mode="recording"
+    S.rAcc=0
+    S.autoSaveAcc=0
+    clearAC()
+    S.lastMilestone=0
+
+    local _,h,hu=getChar()
+    if h then
+        h.AssemblyLinearVelocity=Vector3.zero
+        h.AssemblyAngularVelocity=Vector3.zero
+    end
+    if hu then
+        local factor=S.slowRec and sf() or 1
+        hu.WalkSpeed=S.sWS*factor
+        hu.JumpPower=S.sJP*factor
+        pcall(function() hu:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        task.defer(function()
+            if S.mode=="recording" then pcall(function() hu:ChangeState(Enum.HumanoidStateType.Running) end) end
+        end)
+    end
+    if S.camR then cam.CameraType=Enum.CameraType.Custom end
+    if S.slowRec then applySlowGravity() end
+    if S.freezeLighting then captureLighting() end
+    notify("REC"..(S.slowRec and (" Slow "..tostring(sf()).."x") or ""),P.rec)
+end
+
+local function recPause()
+    if S.mode~="recording" then return end
+    local _,h,hu,an=getChar()
+    if h then
+        h.AssemblyLinearVelocity=Vector3.zero
+        h.AssemblyAngularVelocity=Vector3.zero
+    end
+    if hu then
+        hu.WalkSpeed=0; hu.JumpPower=0
+        pcall(function() hu:ChangeState(Enum.HumanoidStateType.Physics) end)
+    end
+    if an then pcall(function() for _,t in ipairs(an:GetPlayingAnimationTracks()) do t:AdjustSpeed(0) end end) end
+    S.mode="rec_paused"
+    notify("REC Paused F"..S.frame,P.pause)
+end
+
+local function recResume()
+    if S.mode~="rec_paused" then return end
+    local _,_,hu,an=getChar()
+    local factor=S.slowRec and sf() or 1
+    if hu then
+        hu.WalkSpeed=S.sWS*factor
+        hu.JumpPower=S.sJP*factor
+        pcall(function() hu:ChangeState(Enum.HumanoidStateType.Running) end)
+    end
+    if an then pcall(function() for _,t in ipairs(an:GetPlayingAnimationTracks()) do t:AdjustSpeed(factor) end end) end
+    S.mode="recording"
+    notify("REC Resumed F"..S.frame,P.rec)
+end
+
+local function stopRec()
+    removeSlowGravity()
+    local _,_,hu,an=getChar()
+    if hu then hu.WalkSpeed=S.sWS; hu.JumpPower=S.sJP end
+    if an and S.slowRec then pcall(function() for _,t in ipairs(an:GetPlayingAnimationTracks()) do t:AdjustSpeed(1) end end) end
+    S.mode="idle"
+    S.frame=fc()
+    refreshDirty()
+    updateSeekMarker()
+    if S.autoTrailRefresh and S.trail then
+        showTrail()
+        refreshCamGuide()
+        refreshVelGuide()
+    end
+    notify("Stop "..fc().."F ("..("%.1f"):format(fc()*DT).."s)",P.play)
+end
+
+local function recTick(dt)
+    if S.mode~="recording" then return end
+    local factor=S.slowRec and sf() or 1
+    if S.slowRec then
+        local _,_,_,an=getChar()
+        if an then pcall(function() for _,t in ipairs(an:GetPlayingAnimationTracks()) do t:AdjustSpeed(factor) end end) end
+    end
+    S.rAcc=S.rAcc+dt*factor
+    S.autoSaveAcc=S.autoSaveAcc+dt
+    while S.rAcc>=DT do
+        S.rAcc=S.rAcc-DT
+        local f=capFrame()
+        if f then
+            table.insert(sl().frames,f)
+            S.frame=#sl().frames
+            markDirty(true)
+            maybeMilestoneNotify()
+
+            if S.autoCkpt and S.autoCkptEvery>0 and S.frame>0 and (S.frame % S.autoCkptEvery==0) then
+                if addCheckpointAtFrame(S.frame,true) then
+                    if sl().checkpointNames then sl().checkpointNames[tostring(S.frame)]="A"..S.frame end
+                    notify("Auto checkpoint F"..S.frame,P.auto)
+                end
+            end
+        end
+    end
+    if S.autoSave and hasFile and S.autoSaveAcc>=S.autoSaveEvery then
+        S.autoSaveAcc=0
+        saveSlotDirect(S.slot)
+        notify("AutoSaved",P.play)
+    end
+end
+
+local function recPausedHold()
+    if S.mode~="rec_paused" then return end
+    local _,h,hu=getChar(); if not h then return end
+    h.AssemblyLinearVelocity=Vector3.zero
+    h.AssemblyAngularVelocity=Vector3.zero
+    if hu then
+        hu.WalkSpeed=0; hu.JumpPower=0
+        pcall(function() hu:ChangeState(Enum.HumanoidStateType.Physics) end)
+    end
+end
+
+---------- PLAYBACK ----------
+local function startPlay()
+    local s=sl(); if not s or #s.frames==0 then notify("No frames",P.rec); return end
+    local c,h,hu=getChar(); if not c or not h or not hu then notify("No character",P.rec); return end
+    if hu.WalkSpeed>0 then S.sWS=hu.WalkSpeed end
+    if hu.JumpPower>0 then S.sJP=hu.JumpPower end
+    if S.frame>=#s.frames or S.frame<1 then S.frame=1 end
+    S.mode="playing"
+    S.acc=0
+    stopPAnims()
+    clearAC()
+    hu.WalkSpeed=0; hu.JumpPower=0
+    if S.freezeLighting then captureLighting() end
+    updateSeekMarker()
+    notify("Play F"..S.frame,P.play)
+end
+
+local function pausePlay()
+    if S.mode=="playing" then
+        S.mode="paused"
+        local s=sl(); if s and s.frames[S.frame] then applyAnims(s.frames[S.frame].an,true) end
+        local _,h,hu=getChar()
+        if h then
+            h.AssemblyLinearVelocity=Vector3.zero
+            h.AssemblyAngularVelocity=Vector3.zero
+        end
+        if hu then
+            hu.WalkSpeed=0; hu.JumpPower=0
+            pcall(function() hu:ChangeState(Enum.HumanoidStateType.Physics) end)
+        end
+        updateSeekMarker()
+        notify("Paused F"..S.frame,P.pause)
+    elseif S.mode=="paused" then
+        S.mode="playing"
+        S.acc=0
+        updateSeekMarker()
+        notify("Resume",P.play)
+    end
+end
+
+local function stopPlay()
+    if S.addFramePending then
+        S.addFramePending=false; S.addFrameAcc=0
+        local _,h,hu=getChar()
+        if h then
+            h.AssemblyLinearVelocity=Vector3.zero
+            h.AssemblyAngularVelocity=Vector3.zero
+        end
+        if hu then hu.WalkSpeed=0; hu.JumpPower=0 end
+    end
+    S.mode="idle"
+    clearAC()
+    stopPAnims()
+    restoreCharacter()
+    updateSeekMarker()
+    notify("Stop",P.dim)
+end
+
+local function stopAll()
+    if S.mode=="recording" or S.mode=="rec_paused" then
+        stopRec()
+    elseif S.mode~="idle" then
+        stopPlay()
+    end
+end
+
+local function seekTo(idx)
+    local s=sl(); if not s or #s.frames==0 then return end
+    local target=math.clamp(idx,1,#s.frames)
+    if S.snapToCkpt and s.checkpoints and #s.checkpoints>0 then
+        local near=nearestCheckpointIndex(target)
+        if near and math.abs(near-target)<=2 then target=near end
+    end
+    S.frame=target
+    if S.mode=="playing" or S.mode=="paused" then
+        applyFrame(S.frame,S.mode~="playing")
+    end
+    updateSeekMarker()
+end
+
+local function playTick(dt)
+    if S.mode~="playing" then return end
+    local s=sl(); if not s or #s.frames==0 then stopPlay(); return end
+    S.acc=S.acc+dt*spd()
+    while S.acc>=DT do
+        S.acc=S.acc-DT
+        S.frame=S.frame+1
+        if S.frame>#s.frames then
+            if S.loop then
+                S.frame=1; S.acc=0
+            else
+                S.frame=#s.frames
+                pausePlay()
+                return
+            end
+        end
+        if S.stopAtCheckpoint and hasValue(s.checkpoints or {},S.frame) and S.frame<#s.frames then
+            applyFrame(S.frame,true)
+            S.mode="paused"
+            notify("Auto pause checkpoint F"..S.frame,P.ckpt)
+            updateSeekMarker()
+            return
+        end
+    end
+    applyFrame(S.frame,false)
+    updateSeekMarker()
+end
+
+local function holdTick()
+    if S.addFramePending then return end
+    if S.mode~="paused" then return end
+    if not S.holdPose then return end
+    local s=sl(); if not s or not s.frames[S.frame] then return end
+    local f=s.frames[S.frame]
+    local _,h,hu=getChar(); if not h then return end
+    h.CFrame=dCF(f.cf)
+    h.AssemblyLinearVelocity=Vector3.zero
+    h.AssemblyAngularVelocity=Vector3.zero
+    pcall(function() hu:ChangeState(Enum.HumanoidStateType.Physics) end)
+    if hu then hu.WalkSpeed=0; hu.JumpPower=0 end
+end
+
+---------- TRAIL ----------
+local clearTrail
+local showTrail
+
+clearTrail=function()
+    if S.tFolder then S.tFolder:Destroy(); S.tFolder=nil end
+    clearSeekMarker()
+    clearCamGuide()
+    clearVelGuide()
+end
+
+showTrail=function()
+    clearTrail()
+    clearCkptParts()
+    local s=sl(); if not s or #s.frames<2 then return end
+    local fo=I("Folder",{Name="TAS_Trail",Parent=workspace}); S.tFolder=fo
+    local ckptSet={}
+    for _,fi in ipairs(s.checkpoints or {}) do ckptSet[fi]=true end
+    local pts={}
+    local lastPos=nil
+    for i=1,#s.frames do
+        local f=s.frames[i]
+        local pos=dCF(f.cf).Position
+        if not lastPos or (pos-lastPos).Magnitude>=TRAIL_DOT_DIST or ckptSet[i] then
+            pts[#pts+1]={pos=pos,idx=i,ck=ckptSet[i] or false}
+            lastPos=pos
+        end
+    end
+    local total=#s.frames
+    for i=1,#pts-1 do
+        local p1=pts[i].pos; local p2=pts[i+1].pos; local dist=(p2-p1).Magnitude
+        if dist>0.01 then
+            local t=(pts[i].idx-1)/math.max(1,total-1)
+            local col=Color3.fromRGB(math.floor(t*220),math.floor((1-t)*200)+30,60)
+            local d=TRAIL_LINE_R*2
+            local mid=(p1+p2)*0.5
+            I("Part",{
+                Size=Vector3.new(d,d,dist),CFrame=CFrame.new(mid,p2),Anchored=true,CanCollide=false,CanTouch=false,CanQuery=false,
+                Material=Enum.Material.Neon,CastShadow=false,Transparency=0.15,Color=col,Parent=fo
+            })
+        end
+    end
+    for _,pt in ipairs(pts) do
+        local t=(pt.idx-1)/math.max(1,total-1)
+        if pt.ck then
+            local cp=I("Part",{
+                Size=Vector3.new(0.7,0.7,0.7),Shape=Enum.PartType.Ball,Position=pt.pos+Vector3.new(0,0.4,0),
+                Anchored=true,CanCollide=false,CanTouch=false,CanQuery=false,Material=Enum.Material.Neon,
+                CastShadow=false,Transparency=0,Color=P.ckpt,Parent=fo
+            })
+            local bb=I("BillboardGui",{Size=UDim2.new(0,76,0,32),StudsOffset=Vector3.new(0,1.2,0),AlwaysOnTop=true,Parent=cp})
+            local lbl="★"
+            for i,fi in ipairs(s.checkpoints or {}) do
+                if fi==pt.idx then lbl="★"..checkpointLabel(fi,i) break end
+            end
+            I("TextLabel",{
+                Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text=lbl,TextScaled=true,
+                TextColor3=P.ckpt,Font=Enum.Font.GothamBold,Parent=bb
+            })
+        else
+            local r=TRAIL_DOT_R*2
+            local col=Color3.fromRGB(math.floor(t*220),math.floor((1-t)*200)+30,60)
+            I("Part",{
+                Size=Vector3.new(r,r,r),Shape=Enum.PartType.Ball,Position=pt.pos,Anchored=true,CanCollide=false,CanTouch=false,CanQuery=false,
+                Material=Enum.Material.Neon,CastShadow=false,Transparency=0.2,Color=col,Parent=fo
+            })
+        end
+    end
+    for i,fi in ipairs(s.checkpoints or {}) do
+        local f=s.frames[fi]
+        if f then spawnCkptMarker(dCF(f.cf).Position,checkpointLabel(fi,i)) end
+    end
+    updateSeekMarker()
+    refreshCamGuide()
+    refreshVelGuide()
+    notify("Trail "..#pts.."pts"..(#(s.checkpoints or {})>0 and (" ★"..#s.checkpoints) or ""),P.acc)
+end
+
+---------- TRIM ----------
+local function trimHere()
+    local s=sl()
+    if not s or #s.frames==0 or S.frame<1 or S.frame>=#s.frames then
+        notify("Can't trim",P.rec); return
+    end
+    pushUndo()
+    local rm=#s.frames-S.frame
+    for i=#s.frames,S.frame+1,-1 do table.remove(s.frames,i) end
+    if s.checkpoints then
+        for i=#s.checkpoints,1,-1 do
+            if s.checkpoints[i]>S.frame then
+                s.checkpointNames[tostring(s.checkpoints[i])]=nil
+                table.remove(s.checkpoints,i)
+            end
+        end
+        refreshCkptMarkers()
+    end
+    markDirty(true)
+    if S.trail then showTrail() else updateSeekMarker() end
+    notify("Trim end -"..rm.." -> "..#s.frames.."F",P.pause)
+end
+local function trimFront()
+    local s=sl()
+    if not s or #s.frames==0 or S.frame<=1 then
+        notify("Can't trim",P.rec); return
+    end
+    pushUndo()
+    local rm=S.frame-1
+    for _=1,rm do table.remove(s.frames,1) end
+    if s.checkpoints then
+        local nc={}
+        local nn={}
+        for _,fi in ipairs(s.checkpoints) do
+            local n=fi-rm
+            if n>=1 then
+                nc[#nc+1]=n
+                if s.checkpointNames[tostring(fi)] then nn[tostring(n)]=s.checkpointNames[tostring(fi)] end
+            end
+        end
+        s.checkpoints=nc
+        s.checkpointNames=nn
+        refreshCkptMarkers()
+    end
+    S.frame=1
+    markDirty(true)
+    if S.trail then showTrail() else updateSeekMarker() end
+    notify("Trim front -"..rm.." -> "..#s.frames.."F",P.pause)
+end
+
+---------- GHOST ----------
+local function killGhost()
+    if S.gPart then pcall(function() S.gPart:Destroy() end); S.gPart=nil end
+    if S.gClone then pcall(function() S.gClone.model:Destroy() end); S.gClone=nil end
+    S.gBuildType=nil
+end
+local function buildEmojiGhost()
+    if S.gPart then return end
+    S.gPart=I("Part",{
+        Name="TAS_Ghost",Size=Vector3.new(2,5,2),Anchored=true,CanCollide=false,CanTouch=false,CanQuery=false,
+        Material=Enum.Material.ForceField,BrickColor=BrickColor.new("Electric blue"),Transparency=0.4,
+        CastShadow=false,Parent=workspace
+    })
+    local bb=I("BillboardGui",{Size=UDim2.new(0,36,0,36),StudsOffset=Vector3.new(0,3.5,0),AlwaysOnTop=true,Parent=S.gPart})
+    I("TextLabel",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text="👻",TextScaled=true,TextColor3=Color3.new(1,1,1),Parent=bb})
+end
+local function buildCloneGhost()
+    if S.gClone then return end
+    local c=plr.Character; if not c then return end
+    local clone=c:Clone(); clone.Name="TAS_GhostClone"
+    for _,v in ipairs(clone:GetDescendants()) do
+        if v:IsA("Script") or v:IsA("LocalScript") or v:IsA("ModuleScript") or v:IsA("Animator") then v:Destroy() end
+    end
+    local hum=clone:FindFirstChildOfClass("Humanoid"); if hum then hum:Destroy() end
+    local cHRP=clone:FindFirstChild("HumanoidRootPart")
+    local parts={}
+    if cHRP then
+        local inv=cHRP.CFrame:Inverse()
+        for _,v in ipairs(clone:GetDescendants()) do
+            if v:IsA("BasePart") then
+                parts[v]=inv*v.CFrame
+                v.Anchored=true; v.CanCollide=false; v.CanTouch=false; v.CanQuery=false; v.CastShadow=false
+                v.Transparency=(v==cHRP) and 1 or math.clamp(v.Transparency+0.45,0,0.9)
+                v.LocalTransparencyModifier=0
+            end
+        end
+    end
+    clone.Parent=workspace
+    S.gClone={model=clone,hrp=cHRP,parts=parts}
+end
+local function ghostTick(dt)
+    if not S.ghost then killGhost(); return end
+    local s=sl(); if not s or #s.frames==0 then return end
+    if S.ghostType~=S.gBuildType then
+        killGhost()
+        S.gF=1
+        S.gA=0
+        S.gBuildType=S.ghostType
+    end
+    if S.ghostType=="clone" then
+        if S.gPart then pcall(function() S.gPart:Destroy() end); S.gPart=nil end
+        buildCloneGhost()
+    else
+        if S.gClone then pcall(function() S.gClone.model:Destroy() end); S.gClone=nil end
+        buildEmojiGhost()
+    end
+    S.gA=S.gA+dt
+    while S.gA>=DT do
+        S.gA=S.gA-DT
+        S.gF=S.gF+1
+        if S.gF>#s.frames then S.gF=1 end
+    end
+    local f=s.frames[S.gF]; if not f then return end
+    local cf=dCF(f.cf)
+    if S.ghostType=="clone" and S.gClone and S.gClone.hrp then
+        S.gClone.hrp.CFrame=cf
+        for part,offset in pairs(S.gClone.parts) do
+            pcall(function() if part.Parent then part.CFrame=cf*offset end end)
+        end
+    elseif S.gPart then
+        S.gPart.CFrame=cf
+    end
+end
+
+---------- FILE I/O ----------
+function saveSlotDirect(idx)
+    if not hasFile then notify("No file API",P.pause); return end
+    pcall(function() makefolder("TAS") end)
+    pcall(function() makefolder(PLACE_DIR) end)
+    local s=S.slots[idx]; if not s then return end
+    s.meta.ts=os.time()
+    local ok=pcall(writefile,CFG.DIR.."slot_"..idx..".json",Http:JSONEncode({
+        n=s.name,m=s.meta,f=s.frames,c=s.checkpoints or{},cn=s.checkpointNames or {}
+    }))
+    if ok then
+        local mf={}
+        for i,v in pairs(S.slots) do
+            mf[tostring(i)]={n=v.name,fc=#v.frames,dirty=v.dirty or false}
+        end
+        pcall(writefile,CFG.MAN,Http:JSONEncode(mf))
+        s.lastSavedHash=slotHash(s)
+        s.dirty=false
+        notify("Saved #"..idx.." ["..mapName.."]",P.play)
+    else
+        notify("Save failed",P.rec)
+    end
+end
+local function loadSlot(idx)
+    if not hasFile then return false end
+    local ok,raw=pcall(readfile,CFG.DIR.."slot_"..idx..".json")
+    if not ok or not raw then return false end
+    local ok2,d=pcall(function() return Http:JSONDecode(raw) end)
+    if not ok2 or not d then return false end
+    local s={
+        name=d.n or ("Slot "..idx),
+        frames=d.f or {},
+        checkpoints=d.c or {},
+        checkpointNames=d.cn or {},
+        meta=d.m or {},
+        dirty=false,lastSavedHash=nil,undoStack={},redoStack={}
+    }
+    s.lastSavedHash=Http:JSONEncode({
+        n=s.name,m=s.meta,f=s.frames,c=s.checkpoints or {},cn=s.checkpointNames or {}
+    })
+    S.slots[idx]=s
+    return true
+end
+local function loadAll()
+    if not hasFile then return end
+    local ok,raw=pcall(readfile,CFG.MAN); if not ok or not raw then return end
+    local ok2,mf=pcall(function() return Http:JSONDecode(raw) end); if not ok2 or not mf then return end
+    for k in pairs(mf) do
+        local i=tonumber(k)
+        if i then loadSlot(i) end
+    end
+end
+
+---------- UNDO / REDO ----------
+local function applyUndoState(state)
+    if S.mode~="idle" then stopAll() end
+    local s=sl(); if not s then return end
+    s.frames=deepCopy(state.frames)
+    s.checkpoints=deepCopy(state.checkpoints or {})
+    s.checkpointNames=deepCopy(state.checkpointNames or {})
+    S.frame=math.clamp(state.frame or S.frame,0,#s.frames)
+    if S.frame<1 and #s.frames>0 then S.frame=1 end
+    markDirty(true)
+end
+local function undo()
+    local s=sl(); if not s or not s.undoStack or #s.undoStack==0 then notify("Nothing to undo",P.rec); return end
+    s.redoStack=s.redoStack or {}
+    s.redoStack[#s.redoStack+1]={
+        frames=deepCopy(s.frames),
+        checkpoints=deepCopy(s.checkpoints or {}),
+        checkpointNames=deepCopy(s.checkpointNames or {}),
+        frame=S.frame
+    }
+    applyUndoState(table.remove(s.undoStack))
+    if S.trail then showTrail() else clearTrail(); clearCkptParts(); refreshCkptMarkers() end
+    updateSeekMarker()
+    notify("Undo ("..#s.undoStack.." left)",P.pause)
+end
+local function redo()
+    local s=sl(); if not s or not s.redoStack or #s.redoStack==0 then notify("Nothing to redo",P.rec); return end
+    s.undoStack=s.undoStack or {}
+    s.undoStack[#s.undoStack+1]={
+        frames=deepCopy(s.frames),
+        checkpoints=deepCopy(s.checkpoints or {}),
+        checkpointNames=deepCopy(s.checkpointNames or {}),
+        frame=S.frame
+    }
+    applyUndoState(table.remove(s.redoStack))
+    if S.trail then showTrail() else clearTrail(); clearCkptParts(); refreshCkptMarkers() end
+    updateSeekMarker()
+    notify("Redo ("..#s.redoStack.." left)",P.acc)
+end
+
+---------- ADD ONE FRAME ----------
+local function addOneFrame()
+    if S.mode~="paused" then return end
+    if S.frame~=fc() or fc()==0 then return end
+    if S.addFramePending then return end
+    pushUndo()
+    S.addFramePending=true
+    S.addFrameAcc=0
+    local _,h,hu=getChar()
+    if hu then
+        hu.WalkSpeed=S.sWS; hu.JumpPower=S.sJP
+        pcall(function() hu:ChangeState(Enum.HumanoidStateType.Running) end)
+    end
+    if h then
+        h.AssemblyLinearVelocity=Vector3.zero
+        h.AssemblyAngularVelocity=Vector3.zero
+    end
+    notify("+1F... Move slightly",P.acc)
+end
+
+local function addFrameTick(dt)
+    if not S.addFramePending then return end
+    S.addFrameAcc=S.addFrameAcc+dt
+    if S.addFrameAcc>=DT then
+        S.addFramePending=false; S.addFrameAcc=0
+        local f=capFrame(); local s=sl()
+        if f and s then
+            table.insert(s.frames,f)
+            S.frame=#s.frames
+            markDirty(true)
+            if S.autoCkpt and S.autoCkptEvery>0 and S.frame % S.autoCkptEvery==0 then
+                addCheckpointAtFrame(S.frame,true)
+            end
+            if S.trail then showTrail() else updateSeekMarker() end
+        end
+        local _,h,hu=getChar()
+        if h then
+            h.AssemblyLinearVelocity=Vector3.zero
+            h.AssemblyAngularVelocity=Vector3.zero
+        end
+        if hu then
+            hu.WalkSpeed=0; hu.JumpPower=0
+            pcall(function() hu:ChangeState(Enum.HumanoidStateType.Physics) end)
+        end
+        notify("+1F -> "..fc().."F",P.acc)
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════════
+-- UI
+-- ═══════════════════════════════════════════════════════════════════
+local gui=I("ScreenGui",{Name="TAS_Pro",ResetOnSpawn=false,ZIndexBehavior=Enum.ZIndexBehavior.Sibling,DisplayOrder=999,Parent=plr.PlayerGui})
+local function corner(p,r) I("UICorner",{CornerRadius=UDim.new(0,r or 6),Parent=p}) end
+local function stroke(p,c,t) I("UIStroke",{Color=c or P.acc,Thickness=t or 1,Transparency=0.5,Parent=p}) end
+local function mkClose(par)
+    local b=I("TextButton",{Size=UDim2.new(0,24,0,20),Position=UDim2.new(1,-28,0.5,-10),BackgroundColor3=P.closeR,Text="X",TextSize=12,Font=Enum.Font.GothamBold,TextColor3=Color3.new(1,1,1),AutoButtonColor=true,Parent=par})
+    corner(b,5)
+    I("UIStroke",{Color=Color3.fromRGB(255,90,90),Thickness=1,Transparency=0.4,Parent=b})
+    return b
+end
+
+local uiTogBtn=I("TextButton",{
+    Size=UDim2.new(0,42,0,42),
+    Position=UDim2.new(AS.togBtnXS,AS.togBtnXO,AS.togBtnYS,AS.togBtnYO),
+    BackgroundColor3=P.acc,Text="🎬",TextSize=20,Font=Enum.Font.GothamBold,TextColor3=P.txt,
+    AutoButtonColor=true,Parent=gui
+})
+corner(uiTogBtn,10)
+
+main=I("Frame",{
+    Size=UDim2.new(0,CFG.W,0,300),
+    Position=UDim2.new(AS.mainPosXS,AS.mainPosXO,AS.mainPosYS,AS.mainPosYO),
+    BackgroundColor3=P.bg,BorderSizePixel=0,Visible=true,ClipsDescendants=true,Parent=gui
+})
+corner(main,10); stroke(main,P.acc,1.5)
+
+local recBtn,playBtn,pauseBtn,stopBtn,frameLbl,timeLbl,spdLbl,statsLbl
+local sliderBg,sliderFill,sliderThumb,sliderTicks,sliderTouch
+local s10L,s1L,s1R,s10R
+local spdDown,spdUp
+local trimFrontBtn,trimBtn,ghostBtn,loopBtn,trailBtn,saveBtn,loadBtn
+local undoBtn,redoBtn,undoInfoLbl,addFrameBtn
+local animTog,camTog,delBtn,cfgBtn
+local tabScroll,addTabBtn
+local tabButtons={}
+local confirmShade,confirmYes,confirmNo
+local loadConfirmShade,loadConfirmYes,loadConfirmNo
+local cfgScroll,cfgTitleBar,cfgCloseBtn
+local sfLbl
+local ghostEmojiBtn,ghostCloneBtn
+local hideTog
+
+S.topBar=I("Frame",{Size=UDim2.new(1,0,0,36),Position=UDim2.new(0,0,0,0),BackgroundColor3=Color3.new(0,0,0),BorderSizePixel=0,Visible=false,ZIndex=998,Parent=gui})
+S.bottomBar=I("Frame",{Size=UDim2.new(1,0,0,36),Position=UDim2.new(0,0,1,-36),BackgroundColor3=Color3.new(0,0,0),BorderSizePixel=0,Visible=false,ZIndex=998,Parent=gui})
+
+---------- CFG PANEL SIZE ----------
+local szBtnRefs = {}
+local function applyCfgSize(sz)
+    sz = sz or AS.cfgSize or "medium"
+    AS.cfgSize = sz
+    saveAS()
+    if not cfgPanel then return end
+    local d = CFG_PANEL_SIZES[sz] or CFG_PANEL_SIZES.medium
+    cfgPanel.Size = UDim2.new(0, d.w, 0, d.h)
+    cfgPanel.Position = UDim2.new(0.5, -d.w/2, 0.5, -d.h/2)
+    for i, btn in ipairs(szBtnRefs) do
+        local keys = {"small","medium","large"}
+        btn.BackgroundColor3 = (keys[i]==sz) and P.togOn or P.btn
+    end
+end
+
+local function refreshTabs()
+    for _,b in ipairs(tabButtons) do b:Destroy() end
+    tabButtons={}
+    for i,s in ipairs(S.slots) do
+        local label=s.name..(s.dirty and "*" or "")
+        local tb=I("TextButton",{
+            Size=UDim2.new(0,60,1,-2),LayoutOrder=i,
+            BackgroundColor3=i==S.slot and P.tabA or P.btn,
+            Text=label,TextSize=10,TextTruncate=Enum.TextTruncate.AtEnd,
+            Font=Enum.Font.GothamSemibold,TextColor3=P.txt,AutoButtonColor=true,Parent=tabScroll
+        })
+        corner(tb,4)
+        tb.MouseButton1Click:Connect(function()
+            if S.mode=="recording" or S.mode=="rec_paused" then stopRec() elseif S.mode~="idle" then stopPlay() end
+            S.slot=i
+            S.frame=math.min(S.frame,fc())
+            clearCkptParts()
+            if S.trail then showTrail() else clearSeekMarker(); clearCamGuide(); clearVelGuide() end
+            refreshTabs()
+            notify("Slot: "..s.name,P.acc)
+        end)
+        tabButtons[#tabButtons+1]=tb
+    end
+end
+
+local function openSaveConfirm() S.saveConfirmOpen=true; confirmShade.Visible=true end
+local function closeSaveConfirm() S.saveConfirmOpen=false; confirmShade.Visible=false end
+local function openLoadConfirm() S.loadConfirmOpen=true; loadConfirmShade.Visible=true end
+local function closeLoadConfirm() S.loadConfirmOpen=false; loadConfirmShade.Visible=false end
+local function doLoadSlot()
+    if loadSlot(S.slot) then
+        S.frame=0
+        refreshTabs()
+        if S.trail then showTrail() else clearSeekMarker(); clearCamGuide(); clearVelGuide(); refreshCkptMarkers() end
+        notify("Loaded "..fc().."F",P.play)
+    else
+        notify("No file found",P.rec)
+    end
+end
+
+local _tickKey=""
+local function refreshSliderTicks()
+    local s=sl()
+    local key=tostring(S.slot).."|"..tostring(s and #s.frames or 0).."|"
+    if s then for _,fi in ipairs(s.checkpoints or {}) do key=key..tostring(fi).."," end end
+    if key==_tickKey then return end
+    _tickKey=key
+    for _,c in ipairs(sliderTicks:GetChildren()) do c:Destroy() end
+    if not s or #s.frames==0 then return end
+    for _,fi in ipairs(s.checkpoints or {}) do
+        I("Frame",{
+            Size=UDim2.new(0,3,0,10),
+            Position=UDim2.new(math.clamp(fi/#s.frames,0,1),-1,0,4),
+            BackgroundColor3=P.ckpt,BorderSizePixel=0,Parent=sliderTicks
+        })
+    end
+end
+
+-- ─── Build Main UI ───────────────────────
+local function buildMainUI()
+    local Y=0
+    local function row(h)
+        local r=I("Frame",{Size=UDim2.new(1,-8,0,h),Position=UDim2.new(0,4,0,Y),BackgroundTransparency=1,Parent=main})
+        Y=Y+h+1
+        return r
+    end
+
+    local titleBar=I("Frame",{Size=UDim2.new(1,0,0,26),BackgroundColor3=P.bar,BorderSizePixel=0,Parent=main})
+    corner(titleBar,10)
+    I("TextLabel",{
+        Size=UDim2.new(1,-50,1,0),Position=UDim2.new(0,8,0,0),
+        BackgroundTransparency=1,Text="TAS Pro v3.7.0",
+        Font=Enum.Font.GothamBold,TextSize=12,TextColor3=P.txt,
+        TextXAlignment=Enum.TextXAlignment.Left,Parent=titleBar
+    })
+    local closeBtn=mkClose(titleBar)
+    Y=27
+
+    closeBtn.MouseButton1Click:Connect(function() S.uiOpen=false; main.Visible=false end)
+
+    local dragging=false; local dragObj=nil; local dragStart=nil; local dStartPos=nil
+    titleBar.InputBegan:Connect(function(inp)
+        if not AS.draggable then return end
+        if inp.UserInputType==Enum.UserInputType.MouseButton1 or inp.UserInputType==Enum.UserInputType.Touch then
+            dragging=true; dragObj=inp; dragStart=inp.Position; dStartPos=main.Position
+        end
+    end)
+    titleBar.InputEnded:Connect(function(inp)
+        if dragging and inp==dragObj then
+            dragging=false; dragObj=nil
+            AS.mainPosXS=main.Position.X.Scale; AS.mainPosXO=main.Position.X.Offset
+            AS.mainPosYS=main.Position.Y.Scale; AS.mainPosYO=main.Position.Y.Offset
+            saveAS()
+        end
+    end)
+    UIS.InputChanged:Connect(function(inp)
+        if dragging and inp==dragObj then
+            local d=inp.Position-dragStart
+            main.Position=UDim2.new(dStartPos.X.Scale,dStartPos.X.Offset+d.X,dStartPos.Y.Scale,dStartPos.Y.Offset+d.Y)
+        end
+    end)
+
+    local tabRow=row(24)
+    tabScroll=I("ScrollingFrame",{
+        Size=UDim2.new(1,-32,1,0),BackgroundTransparency=1,ScrollBarThickness=0,
+        CanvasSize=UDim2.new(0,0,0,0),ScrollingDirection=Enum.ScrollingDirection.X,
+        AutomaticCanvasSize=Enum.AutomaticSize.X,Parent=tabRow
+    })
+    I("UIListLayout",{FillDirection=Enum.FillDirection.Horizontal,Padding=UDim.new(0,2),SortOrder=Enum.SortOrder.LayoutOrder,Parent=tabScroll})
+
+    addTabBtn=I("TextButton",{Size=UDim2.new(0,28,1,0),Position=UDim2.new(1,-30,0,0),BackgroundColor3=P.btn,Text="+",TextSize=16,Font=Enum.Font.GothamBold,TextColor3=P.txt,Parent=tabRow})
+    corner(addTabBtn,4)
+    addTabBtn.MouseButton1Click:Connect(function()
+        if #S.slots>=20 then notify("Max slots reached",P.rec); return end
+        S.slots[#S.slots+1]=newSlot()
+        refreshTabs()
+        notify("Added Slot "..#S.slots,P.play)
+    end)
+
+    local mapRow=row(16)
+    I("TextLabel",{
+        Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,
+        Text="Map: "..mapName.." ("..game.PlaceId..")",
+        Font=Enum.Font.Gotham,TextSize=10,TextColor3=P.dim,
+        TextXAlignment=Enum.TextXAlignment.Left,TextTruncate=Enum.TextTruncate.AtEnd,Parent=mapRow
+    })
+
+    local ctrlRow=row(32)
+    local function cBtn(txt,col,xOff,w)
+        local b=I("TextButton",{
+            Size=UDim2.new(0,w or 44,0,28),Position=UDim2.new(0,xOff,0,2),
+            BackgroundColor3=col,Text=txt,TextSize=13,Font=Enum.Font.GothamBold,TextColor3=P.txt,
+            AutoButtonColor=true,Parent=ctrlRow
+        })
+        corner(b,6)
+        return b
+    end
+    recBtn=cBtn("REC",P.rec,0,54)
+    playBtn=cBtn("▶",P.play,56,36)
+    pauseBtn=cBtn("⏸",P.pause,94,36)
+    stopBtn=cBtn("⏹",P.stop,132,36)
+    frameLbl=I("TextLabel",{Size=UDim2.new(0,94,0,28),Position=UDim2.new(0,170,0,2),BackgroundTransparency=1,Text="F:0/0",Font=Enum.Font.Code,TextSize=11,TextColor3=P.txt,TextXAlignment=Enum.TextXAlignment.Right,Parent=ctrlRow})
+
+    local scrubRow=row(28)
+    local function sBtn(txt,xOff,w)
+        local b=I("TextButton",{Size=UDim2.new(0,w or 24,0,24),Position=UDim2.new(0,xOff,0,2),BackgroundColor3=P.btn,Text=txt,TextSize=11,Font=Enum.Font.GothamBold,TextColor3=P.txt,AutoButtonColor=true,Parent=scrubRow})
+        corner(b,4)
+        return b
+    end
+    s10L=sBtn("<<",0,30); s1L=sBtn("<",32,24); s1R=sBtn(">",208,24); s10R=sBtn(">>",234,30)
+    sliderBg=I("Frame",{Size=UDim2.new(0,150,0,8),Position=UDim2.new(0,58,0,10),BackgroundColor3=P.slBg,Parent=scrubRow}); corner(sliderBg,4)
+    sliderFill=I("Frame",{Size=UDim2.new(0,0,1,0),BackgroundColor3=P.slFl,ClipsDescendants=true,Parent=sliderBg}); corner(sliderFill,4)
+    sliderThumb=I("Frame",{Size=UDim2.new(0,14,0,18),Position=UDim2.new(0,-7,0,-5),BackgroundColor3=Color3.new(1,1,1),Parent=sliderBg}); corner(sliderThumb,7)
+    sliderTicks=I("Frame",{Size=UDim2.new(1,0,0,18),Position=UDim2.new(0,0,0,-10),BackgroundTransparency=1,Parent=sliderBg})
+    sliderTouch=I("TextButton",{Size=UDim2.new(0,158,0,28),Position=UDim2.new(0,54,0,0),BackgroundTransparency=1,Text="",Parent=scrubRow})
+
+    local timeRow=row(14)
+    timeLbl=I("TextLabel",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text="0.00s / 0.00s",Font=Enum.Font.Code,TextSize=10,TextColor3=P.dim,Parent=timeRow})
+
+    local spdRow=row(24)
+    spdDown=I("TextButton",{Size=UDim2.new(0,28,0,22),Position=UDim2.new(0,0,0,1),BackgroundColor3=P.btn,Text="<",TextSize=12,Font=Enum.Font.GothamBold,TextColor3=P.txt,Parent=spdRow}); corner(spdDown,4)
+    spdLbl=I("TextLabel",{Size=UDim2.new(0,60,0,22),Position=UDim2.new(0,30,0,1),BackgroundTransparency=1,Text="1.0x",Font=Enum.Font.GothamBold,TextSize=13,TextColor3=P.acc,Parent=spdRow})
+    spdUp=I("TextButton",{Size=UDim2.new(0,28,0,22),Position=UDim2.new(0,92,0,1),BackgroundColor3=P.btn,Text=">",TextSize=12,Font=Enum.Font.GothamBold,TextColor3=P.txt,Parent=spdRow}); corner(spdUp,4)
+    statsLbl=I("TextLabel",{Size=UDim2.new(0,150,0,22),Position=UDim2.new(1,-150,0,1),BackgroundTransparency=1,Text="v=0.00",Font=Enum.Font.Code,TextSize=10,TextColor3=P.safe,TextXAlignment=Enum.TextXAlignment.Right,Parent=spdRow})
+
+    local toolRow=row(30)
+    local function tBtn(txt,xOff,w,col)
+        local b=I("TextButton",{
+            Size=UDim2.new(0,w or 50,0,26),Position=UDim2.new(0,xOff,0,2),
+            BackgroundColor3=col or P.btn,Text=txt,TextSize=11,Font=Enum.Font.GothamBold,
+            TextColor3=P.txt,AutoButtonColor=true,Parent=toolRow
+        })
+        corner(b,5)
+        return b
+    end
+    trimFrontBtn=tBtn("TrimF",0,44); trimBtn=tBtn("TrimB",46,44); ghostBtn=tBtn("Ghost",92,36)
+    loopBtn=tBtn("Loop",130,36); trailBtn=tBtn("Trail",168,36); saveBtn=tBtn("Save",206,30,P.play); loadBtn=tBtn("Load",238,26,P.acc)
+
+    local undoRow=row(26)
+    undoBtn=I("TextButton",{Size=UDim2.new(0,78,0,22),Position=UDim2.new(0,0,0,2),BackgroundColor3=P.undoOff,Text="Undo",TextSize=11,Font=Enum.Font.GothamBold,TextColor3=P.dim,AutoButtonColor=false,Parent=undoRow}); corner(undoBtn,5)
+    redoBtn=I("TextButton",{Size=UDim2.new(0,78,0,22),Position=UDim2.new(0,80,0,2),BackgroundColor3=P.undoOff,Text="Redo",TextSize=11,Font=Enum.Font.GothamBold,TextColor3=P.dim,AutoButtonColor=false,Parent=undoRow}); corner(redoBtn,5)
+    undoInfoLbl=I("TextLabel",{Size=UDim2.new(0,56,0,22),Position=UDim2.new(0,160,0,2),BackgroundTransparency=1,Text="U:0 R:0",Font=Enum.Font.Code,TextSize=10,TextColor3=P.dim,TextXAlignment=Enum.TextXAlignment.Left,Parent=undoRow})
+    addFrameBtn=I("TextButton",{Size=UDim2.new(0,42,0,22),Position=UDim2.new(0,218,0,2),BackgroundColor3=Color3.fromRGB(30,30,45),Text="+1F",TextSize=11,Font=Enum.Font.GothamBold,TextColor3=P.dim,AutoButtonColor=false,Parent=undoRow}); corner(addFrameBtn,5)
+
+    local togRow=row(24)
+    local function tg2(txt,xOff,w,get,set)
+        local b=I("TextButton",{
+            Size=UDim2.new(0,w or 55,0,20),Position=UDim2.new(0,xOff,0,2),
+            BackgroundColor3=get() and P.togOn or P.togOff,
+            Text=txt,TextSize=9,Font=Enum.Font.GothamSemibold,TextColor3=P.txt,
+            AutoButtonColor=true,Parent=togRow
+        })
+        corner(b,4)
+        b.MouseButton1Click:Connect(function()
+            set(not get())
+            b.BackgroundColor3=get() and P.togOn or P.togOff
+        end)
+        return b
+    end
+    animTog=tg2("Anim",0,70,function() return S.anim end,function(v) S.anim=v; saveFeatStates() end)
+    camTog=tg2("Cam",72,60,function() return S.camR end,function(v) S.camR=v; if not v and S.mode~="idle" then cam.CameraType=Enum.CameraType.Custom end; saveFeatStates(); if S.trail then refreshCamGuide() end end)
+    delBtn=I("TextButton",{Size=UDim2.new(0,58,0,20),Position=UDim2.new(0,134,0,2),BackgroundColor3=P.btn,Text="Del",TextSize=9,Font=Enum.Font.GothamSemibold,TextColor3=P.txt,AutoButtonColor=true,Parent=togRow}); corner(delBtn,4)
+    cfgBtn=I("TextButton",{Size=UDim2.new(0,60,0,20),Position=UDim2.new(0,196,0,2),BackgroundColor3=P.btn,Text="Settings",TextSize=9,Font=Enum.Font.GothamSemibold,TextColor3=P.txt,AutoButtonColor=true,Parent=togRow}); corner(cfgBtn,4)
+
+    local nRow=row(18)
+    nLbl=I("TextLabel",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text="TAS Pro v3.7.0 Ready",Font=Enum.Font.Gotham,TextSize=10,TextColor3=P.dim,TextXAlignment=Enum.TextXAlignment.Left,Parent=nRow})
+
+    main.Size=UDim2.new(0,CFG.W,0,Y+6)
+
+    confirmShade=I("Frame",{Size=UDim2.new(1,0,1,0),BackgroundColor3=Color3.new(0,0,0),BackgroundTransparency=0.35,Visible=false,ZIndex=50,Parent=main})
+    local cb=I("Frame",{Size=UDim2.new(1,-24,0,92),Position=UDim2.new(0,12,0.5,-46),BackgroundColor3=P.bar,BorderSizePixel=0,ZIndex=51,Parent=confirmShade}); corner(cb,8); stroke(cb,P.warn,1.5)
+    I("TextLabel",{Size=UDim2.new(1,-10,0,44),Position=UDim2.new(0,5,0,8),BackgroundTransparency=1,Text="Are you sure?",TextWrapped=true,Font=Enum.Font.GothamSemibold,TextSize=12,TextColor3=P.txt,ZIndex=52,Parent=cb})
+    confirmYes=I("TextButton",{Size=UDim2.new(0.5,-8,0,24),Position=UDim2.new(0,6,1,-30),BackgroundColor3=P.play,Text="YES",Font=Enum.Font.GothamBold,TextSize=12,TextColor3=P.txt,ZIndex=52,Parent=cb}); corner(confirmYes,5)
+    confirmNo=I("TextButton",{Size=UDim2.new(0.5,-8,0,24),Position=UDim2.new(0.5,2,1,-30),BackgroundColor3=P.stop,Text="NO",Font=Enum.Font.GothamBold,TextSize=12,TextColor3=P.txt,ZIndex=52,Parent=cb}); corner(confirmNo,5)
+
+    loadConfirmShade=I("Frame",{Size=UDim2.new(1,0,1,0),BackgroundColor3=Color3.new(0,0,0),BackgroundTransparency=0.35,Visible=false,ZIndex=50,Parent=main})
+    local lb=I("Frame",{Size=UDim2.new(1,-24,0,102),Position=UDim2.new(0,12,0.5,-51),BackgroundColor3=P.bar,BorderSizePixel=0,ZIndex=51,Parent=loadConfirmShade}); corner(lb,8); stroke(lb,P.warn,1.5)
+    I("TextLabel",{Size=UDim2.new(1,-10,0,54),Position=UDim2.new(0,5,0,7),BackgroundTransparency=1,Text="Unsaved data!\nContinue loading?",TextWrapped=true,Font=Enum.Font.GothamSemibold,TextSize=11,TextColor3=P.txt,ZIndex=52,Parent=lb})
+    loadConfirmYes=I("TextButton",{Size=UDim2.new(0.5,-8,0,24),Position=UDim2.new(0,6,1,-30),BackgroundColor3=P.play,Text="YES",Font=Enum.Font.GothamBold,TextSize=12,TextColor3=P.txt,ZIndex=52,Parent=lb}); corner(loadConfirmYes,5)
+    loadConfirmNo=I("TextButton",{Size=UDim2.new(0.5,-8,0,24),Position=UDim2.new(0.5,2,1,-30),BackgroundColor3=P.stop,Text="NO",Font=Enum.Font.GothamBold,TextSize=12,TextColor3=P.txt,ZIndex=52,Parent=lb}); corner(loadConfirmNo,5)
+end
+
+-- ─── Build Settings Panel ────────────────
+local function buildCfgPanel()
+    cfgPanel=I("Frame",{Size=UDim2.new(0,252,0,500),Position=UDim2.new(0.5,-126,0.5,-250),BackgroundColor3=P.bg,BorderSizePixel=0,Visible=false,ZIndex=300,Parent=gui})
+    corner(cfgPanel,12)
+    I("UIStroke",{Color=Color3.fromRGB(90,80,180),Thickness=1.5,Transparency=0.3,Parent=cfgPanel})
+
+    cfgTitleBar=I("Frame",{Size=UDim2.new(1,0,0,30),BackgroundColor3=Color3.fromRGB(22,18,44),BorderSizePixel=0,ZIndex=301,Parent=cfgPanel})
+    corner(cfgTitleBar,12)
+    I("UIGradient",{Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(35,25,70)),ColorSequenceKeypoint.new(1,Color3.fromRGB(20,15,45))}),Rotation=90,Parent=cfgTitleBar})
+    I("TextLabel",{Size=UDim2.new(1,-40,1,0),Position=UDim2.new(0,12,0,0),BackgroundTransparency=1,Text="Settings",Font=Enum.Font.GothamBold,TextSize=13,TextColor3=Color3.fromRGB(200,185,255),TextXAlignment=Enum.TextXAlignment.Left,ZIndex=302,Parent=cfgTitleBar})
+    cfgCloseBtn=mkClose(cfgTitleBar); cfgCloseBtn.ZIndex=302
+
+    local cd=false; local ci=nil; local cs=nil; local cp=nil
+    cfgTitleBar.InputBegan:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseButton1 or inp.UserInputType==Enum.UserInputType.Touch then
+            cd=true; ci=inp; cs=inp.Position; cp=cfgPanel.Position
+        end
+    end)
+    cfgTitleBar.InputEnded:Connect(function(inp) if cd and inp==ci then cd=false; ci=nil end end)
+    UIS.InputChanged:Connect(function(inp)
+        if cd and inp==ci then
+            local d=inp.Position-cs
+            cfgPanel.Position=UDim2.new(cp.X.Scale,cp.X.Offset+d.X,cp.Y.Scale,cp.Y.Offset+d.Y)
+        end
+    end)
+
+    cfgScroll=I("ScrollingFrame",{
+        Size=UDim2.new(1,0,1,-32),Position=UDim2.new(0,0,0,32),
+        BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=4,ScrollBarImageColor3=Color3.fromRGB(90,80,180),
+        CanvasSize=UDim2.new(0,0,0,0),ScrollingDirection=Enum.ScrollingDirection.Y,ZIndex=301,Parent=cfgPanel
+    })
+
+    local cy=6
+    local function cr(h)
+        local r=I("Frame",{Size=UDim2.new(1,-16,0,h),Position=UDim2.new(0,8,0,cy),BackgroundTransparency=1,ZIndex=302,Parent=cfgScroll})
+        cy=cy+h+4
+        return r
+    end
+    local function cdiv()
+        cy=cy+2
+        I("Frame",{Size=UDim2.new(1,-16,0,1),Position=UDim2.new(0,8,0,cy),BackgroundColor3=Color3.fromRGB(70,60,120),BackgroundTransparency=0.4,BorderSizePixel=0,ZIndex=302,Parent=cfgScroll})
+        cy=cy+7
+    end
+    local function chdr(txt)
+        local r=cr(16)
+        I("TextLabel",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text=txt,Font=Enum.Font.GothamBold,TextSize=10,TextColor3=Color3.fromRGB(130,115,200),TextXAlignment=Enum.TextXAlignment.Left,ZIndex=303,Parent=r})
+    end
+    local function ctog(lbl,desc,init,cb)
+        local r=cr(30)
+        I("TextLabel",{Size=UDim2.new(1,-58,0,18),Position=UDim2.new(0,0,0,0),BackgroundTransparency=1,Text=lbl,Font=Enum.Font.GothamSemibold,TextSize=12,TextColor3=P.txt,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=303,Parent=r})
+        if desc and desc~="" then
+            I("TextLabel",{Size=UDim2.new(1,-58,0,12),Position=UDim2.new(0,0,1,-12),BackgroundTransparency=1,Text=desc,Font=Enum.Font.Gotham,TextSize=8,TextColor3=P.dim,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=303,Parent=r})
+        end
+        local sv={v=init}
+        local t=I("TextButton",{Size=UDim2.new(0,52,0,22),Position=UDim2.new(1,-52,0.5,-11),BackgroundColor3=init and P.togOn or P.togOff,Text=init and "ON" or "OFF",Font=Enum.Font.GothamBold,TextSize=11,TextColor3=P.txt,AutoButtonColor=false,ZIndex=303,Parent=r})
+        corner(t,5)
+        t.MouseButton1Click:Connect(function()
+            sv.v=not sv.v
+            t.BackgroundColor3=sv.v and P.togOn or P.togOff
+            t.Text=sv.v and "ON" or "OFF"
+            cb(sv.v)
+        end)
+        return t
+    end
+
+    -- ── PANEL SIZE ──────────────────────────
+    chdr("PANEL SIZE")
+    local psr=cr(32)
+    local szLabels={"Small","Medium","Large"}
+    local szKeys={"small","medium","large"}
+    for i,key in ipairs(szKeys) do
+        local xOff=(i-1)*72
+        local sb=I("TextButton",{
+            Size=UDim2.new(0,66,0,24),Position=UDim2.new(0,xOff,0,4),
+            BackgroundColor3=(AS.cfgSize==key) and P.togOn or P.btn,
+            Text=szLabels[i],TextSize=11,Font=Enum.Font.GothamBold,
+            TextColor3=P.txt,AutoButtonColor=false,ZIndex=303,Parent=psr
+        })
+        corner(sb,5)
+        szBtnRefs[i]=sb
+    end
+    for i,key in ipairs(szKeys) do
+        local sb=szBtnRefs[i]
+        sb.MouseButton1Click:Connect(function()
+            applyCfgSize(key)
+            notify("Panel: "..szLabels[i],P.acc)
+        end)
+    end
+    cdiv()
+
+    -- ── SLOW REC ─────────────────────────────
+    chdr("PANEL SIZE")
+    -- (intentionally left as original structure; continuing below)
+
+    chdr("SLOW REC")
+    ctog("Enable Slow REC","Slow jump/fall/walk -> replays at normal speed",S.slowRec,function(v)
+        S.slowRec=v; AS.slowRecEnabled=v; saveAS()
+        if not v then
+            removeSlowGravity()
+            if S.mode=="recording" then local _,_,hu=getChar(); if hu then hu.WalkSpeed=S.sWS; hu.JumpPower=S.sJP end end
+        elseif S.mode=="recording" or S.mode=="rec_paused" then
+            applySlowGravity()
+        end
+        notify(v and ("Slow REC ON "..tostring(sf()).."x") or "Slow REC OFF",v and P.slow or P.dim)
+    end)
+    local sfr=cr(28)
+    I("TextLabel",{Size=UDim2.new(0,80,0,20),Position=UDim2.new(0,0,0,4),BackgroundTransparency=1,Text="Speed Factor",Font=Enum.Font.GothamSemibold,TextSize=11,TextColor3=P.txt,ZIndex=303,Parent=sfr})
+    local sfD=I("TextButton",{Size=UDim2.new(0,24,0,20),Position=UDim2.new(0,82,0,4),BackgroundColor3=P.btn,Text="<",TextSize=11,Font=Enum.Font.GothamBold,TextColor3=P.txt,ZIndex=303,Parent=sfr}); corner(sfD,4)
+    sfLbl=I("TextLabel",{Size=UDim2.new(0,46,0,20),Position=UDim2.new(0,108,0,4),BackgroundTransparency=1,Text=tostring(sf()).."x",Font=Enum.Font.GothamBold,TextSize=12,TextColor3=P.slow,ZIndex=303,Parent=sfr})
+    local sfU=I("TextButton",{Size=UDim2.new(0,24,0,20),Position=UDim2.new(0,156,0,4),BackgroundColor3=P.btn,Text=">",TextSize=11,Font=Enum.Font.GothamBold,TextColor3=P.txt,ZIndex=303,Parent=sfr}); corner(sfU,4)
+    sfD.MouseButton1Click:Connect(function()
+        S.slowRecI=math.max(1,S.slowRecI-1); AS.slowRecI=S.slowRecI; sfLbl.Text=tostring(sf()).."x"; saveAS(); refreshSlowGravity()
+        if S.slowRec and (S.mode=="recording" or S.mode=="rec_paused") then local _,_,hu=getChar(); if hu then hu.WalkSpeed=S.sWS*sf(); hu.JumpPower=S.sJP*sf() end end
+        notify("Slow: "..tostring(sf()).."x",P.slow)
+    end)
+    sfU.MouseButton1Click:Connect(function()
+        S.slowRecI=math.min(#CFG.SLOW_FACTS,S.slowRecI+1); AS.slowRecI=S.slowRecI; sfLbl.Text=tostring(sf()).."x"; saveAS(); refreshSlowGravity()
+        if S.slowRec and (S.mode=="recording" or S.mode=="rec_paused") then local _,_,hu=getChar(); if hu then hu.WalkSpeed=S.sWS*sf(); hu.JumpPower=S.sJP*sf() end end
+        notify("Slow: "..tostring(sf()).."x",P.slow)
+    end)
+    ctog("Slow Camera Too","Slow camera as well (enable Cam first)",S.slowRecCam,function(v) S.slowRecCam=v; AS.slowRecCam=v; saveAS(); notify(v and "Slow Camera ON" or "Slow Camera OFF",P.acc) end)
+
+    cdiv()
+    chdr("RECORDING")
+    ctog("Rec Continue","Press REC during replay/pause to continue from end",S.recContinue,function(v) S.recContinue=v; AS.recContinue=v; saveAS(); notify(v and "Rec Continue ON" or "Rec Continue OFF",P.acc) end)
+    ctog("Auto Save Slot","Auto save while recording every X seconds",S.autoSave,function(v) S.autoSave=v; AS.stAutoSave=v; saveFeatStates(); notify(v and "AutoSave ON" or "AutoSave OFF",P.play) end)
+    local asr=cr(28)
+    I("TextLabel",{Size=UDim2.new(0,84,0,20),Position=UDim2.new(0,0,0,4),BackgroundTransparency=1,Text="Save Every",Font=Enum.Font.GothamSemibold,TextSize=11,TextColor3=P.txt,ZIndex=303,Parent=asr})
+    local asD=I("TextButton",{Size=UDim2.new(0,24,0,20),Position=UDim2.new(0,82,0,4),BackgroundColor3=P.btn,Text="<",TextSize=11,Font=Enum.Font.GothamBold,TextColor3=P.txt,ZIndex=303,Parent=asr}); corner(asD,4)
+    local asLbl=I("TextLabel",{Size=UDim2.new(0,54,0,20),Position=UDim2.new(0,108,0,4),BackgroundTransparency=1,Text=tostring(S.autoSaveEvery).."s",Font=Enum.Font.GothamBold,TextSize=12,TextColor3=P.play,ZIndex=303,Parent=asr})
+    local asU=I("TextButton",{Size=UDim2.new(0,24,0,20),Position=UDim2.new(0,164,0,4),BackgroundColor3=P.btn,Text=">",TextSize=11,Font=Enum.Font.GothamBold,TextColor3=P.txt,ZIndex=303,Parent=asr}); corner(asU,4)
+    asD.MouseButton1Click:Connect(function()
+        S.autoSaveEvery=math.max(60,S.autoSaveEvery-60); AS.stAutoSaveEvery=S.autoSaveEvery; asLbl.Text=tostring(S.autoSaveEvery).."s"; saveFeatStates(); notify("AutoSave every "..S.autoSaveEvery.."s",P.play)
+    end)
+    asU.MouseButton1Click:Connect(function()
+        S.autoSaveEvery=math.min(1800,S.autoSaveEvery+60); AS.stAutoSaveEvery=S.autoSaveEvery; asLbl.Text=tostring(S.autoSaveEvery).."s"; saveFeatStates(); notify("AutoSave every "..S.autoSaveEvery.."s",P.play)
+    end)
+
+    cdiv()
+    chdr("CHECKPOINT AUTOMATION")
+    ctog("Auto Checkpoint","Auto create checkpoint every X frames",S.autoCkpt,function(v)
+        S.autoCkpt=v; AS.autoCkpt=v; saveFeatStates()
+        notify(v and "Auto Checkpoint ON" or "Auto Checkpoint OFF",v and P.auto or P.dim)
+    end)
+    local acr=cr(28)
+    I("TextLabel",{Size=UDim2.new(0,78,0,20),Position=UDim2.new(0,0,0,4),BackgroundTransparency=1,Text="Every Frames",Font=Enum.Font.GothamSemibold,TextSize=11,TextColor3=P.txt,ZIndex=303,Parent=acr})
+    local acD=I("TextButton",{Size=UDim2.new(0,24,0,20),Position=UDim2.new(0,82,0,4),BackgroundColor3=P.btn,Text="<",TextSize=11,Font=Enum.Font.GothamBold,TextColor3=P.txt,ZIndex=303,Parent=acr}); corner(acD,4)
+    local acLbl=I("TextLabel",{Size=UDim2.new(0,54,0,20),Position=UDim2.new(0,108,0,4),BackgroundTransparency=1,Text=tostring(S.autoCkptEvery).."F",Font=Enum.Font.GothamBold,TextSize=12,TextColor3=P.ckpt,ZIndex=303,Parent=acr})
+    local acU=I("TextButton",{Size=UDim2.new(0,24,0,20),Position=UDim2.new(0,164,0,4),BackgroundColor3=P.btn,Text=">",TextSize=11,Font=Enum.Font.GothamBold,TextColor3=P.txt,ZIndex=303,Parent=acr}); corner(acU,4)
+    acD.MouseButton1Click:Connect(function()
+        S.autoCkptEvery=math.max(15,S.autoCkptEvery-15); AS.autoCkptEvery=S.autoCkptEvery; acLbl.Text=tostring(S.autoCkptEvery).."F"; saveFeatStates()
+        notify("Checkpoint every "..S.autoCkptEvery.."F",P.ckpt)
+    end)
+    acU.MouseButton1Click:Connect(function()
+        S.autoCkptEvery=math.min(600,S.autoCkptEvery+15); AS.autoCkptEvery=S.autoCkptEvery; acLbl.Text=tostring(S.autoCkptEvery).."F"; saveFeatStates()
+        notify("Checkpoint every "..S.autoCkptEvery.."F",P.ckpt)
+    end)
+    ctog("Snap Seek To Checkpoint","Seeking near a checkpoint snaps to it",S.snapToCkpt,function(v) S.snapToCkpt=v; AS.snapToCkpt=v; saveFeatStates(); notify(v and "Snap Checkpoint ON" or "Snap Checkpoint OFF",P.ckpt) end)
+    ctog("Stop At Checkpoint","Auto pause when reaching a checkpoint during replay",S.stopAtCheckpoint,function(v) S.stopAtCheckpoint=v; AS.stopAtCheckpoint=v; saveFeatStates(); notify(v and "Stop At Checkpoint ON" or "Stop At Checkpoint OFF",P.ckpt) end)
+    ctog("Auto Name Checkpoints","Automatically name checkpoints",S.autoNameCheckpoints,function(v) S.autoNameCheckpoints=v; AS.stAutoNameCheckpoints=v; saveFeatStates(); notify(v and "Auto Name ON" or "Auto Name OFF",P.ckpt) end)
+
+    cdiv()
+    chdr("VISUAL / PLAYBACK")
+    ctog("Auto Trail Refresh","Auto refresh trail after recording stops",S.autoTrailRefresh,function(v) S.autoTrailRefresh=v; AS.autoTrailRefresh=v; saveFeatStates(); notify(v and "Auto Trail ON" or "Auto Trail OFF",P.acc) end)
+    ctog("Playback Blend","Reduces stutter during playback",S.playbackFrameBlend,function(v) S.playbackFrameBlend=v; AS.playbackFrameBlend=v; saveFeatStates(); notify(v and "Blend ON" or "Blend OFF",P.acc) end)
+    ctog("Hold Pose While Paused","Lock character position while paused",S.holdPose,function(v) S.holdPose=v; AS.stHoldPose=v; saveFeatStates(); notify(v and "Hold Pose ON" or "Hold Pose OFF",P.focus) end)
+    ctog("Velocity Guide","Show velocity arrows along path",S.showVelocity,function(v) S.showVelocity=v; AS.stShowVelocity=v; saveFeatStates(); if S.trail then refreshVelGuide() end; notify(v and "Velocity Guide ON" or "Velocity Guide OFF",P.safe) end)
+    ctog("Camera Guide Path","Show camera path when Cam is enabled",S.camGuide,function(v) S.camGuide=v; AS.camGuide=v; saveFeatStates(); if S.trail then refreshCamGuide() end; notify(v and "Cam Guide ON" or "Cam Guide OFF",P.camGuide) end)
+    ctog("Frame Milestone Notify","Notify every 60 frames while recording",S.notifyFrameMilestones,function(v) S.notifyFrameMilestones=v; AS.notifyFrameMilestones=v; saveFeatStates(); notify(v and "Milestone Notify ON" or "Milestone Notify OFF",P.auto) end)
+    ctog("Show Live Stats","Show speed/time stats on screen",S.showStats,function(v) S.showStats=v; AS.stShowStats=v; saveFeatStates(); notify(v and "Stats ON" or "Stats OFF",P.acc) end)
+
+    cdiv()
+    chdr("CAMERA / SCENE")
+    ctog("Lock Camera FOV","Lock FOV while TAS is active",S.cameraFOVLock,function(v) S.cameraFOVLock=v; AS.stCameraFOVLock=v; saveFeatStates(); notify(v and "FOV Lock ON" or "FOV Lock OFF",P.camGuide) end)
+    local fovr=cr(28)
+    I("TextLabel",{Size=UDim2.new(0,74,0,20),Position=UDim2.new(0,0,0,4),BackgroundTransparency=1,Text="FOV",Font=Enum.Font.GothamSemibold,TextSize=11,TextColor3=P.txt,ZIndex=303,Parent=fovr})
+    local fovD=I("TextButton",{Size=UDim2.new(0,24,0,20),Position=UDim2.new(0,82,0,4),BackgroundColor3=P.btn,Text="<",TextSize=11,Font=Enum.Font.GothamBold,TextColor3=P.txt,ZIndex=303,Parent=fovr}); corner(fovD,4)
+    local fovLbl=I("TextLabel",{Size=UDim2.new(0,54,0,20),Position=UDim2.new(0,108,0,4),BackgroundTransparency=1,Text=tostring(S.cameraFOV),Font=Enum.Font.GothamBold,TextSize=12,TextColor3=P.camGuide,ZIndex=303,Parent=fovr})
+    local fovU=I("TextButton",{Size=UDim2.new(0,24,0,20),Position=UDim2.new(0,164,0,4),BackgroundColor3=P.btn,Text=">",TextSize=11,Font=Enum.Font.GothamBold,TextColor3=P.txt,ZIndex=303,Parent=fovr}); corner(fovU,4)
+    fovD.MouseButton1Click:Connect(function() S.cameraFOV=math.max(40,S.cameraFOV-5); AS.stCameraFOV=S.cameraFOV; fovLbl.Text=tostring(S.cameraFOV); saveFeatStates(); notify("FOV "..S.cameraFOV,P.camGuide) end)
+    fovU.MouseButton1Click:Connect(function() S.cameraFOV=math.min(120,S.cameraFOV+5); AS.stCameraFOV=S.cameraFOV; fovLbl.Text=tostring(S.cameraFOV); saveFeatStates(); notify("FOV "..S.cameraFOV,P.camGuide) end)
+    ctog("Cinematic Bars","Add black bars top and bottom",S.cinematicBars,function(v) S.cinematicBars=v; AS.stCinematicBars=v; refreshBars(); saveFeatStates(); notify(v and "Cinematic Bars ON" or "Cinematic Bars OFF",P.focus) end)
+    ctog("Freeze Lighting","Lock lighting/time of day during replay",S.freezeLighting,function(v) S.freezeLighting=v; AS.stFreezeLighting=v; if v then captureLighting() end; saveFeatStates(); notify(v and "Freeze Light ON" or "Freeze Light OFF",P.focus) end)
+
+    cdiv()
+    chdr("GHOST MODE")
+    local gmr=cr(32)
+    I("TextLabel",{Size=UDim2.new(0,70,0,16),Position=UDim2.new(0,0,0,8),BackgroundTransparency=1,Text="Ghost Type",Font=Enum.Font.GothamSemibold,TextSize=11,TextColor3=P.txt,ZIndex=303,Parent=gmr})
+    ghostEmojiBtn=I("TextButton",{Size=UDim2.new(0,70,0,24),Position=UDim2.new(0,74,0,4),BackgroundColor3=S.ghostType=="emoji" and P.togOn or P.btn,Text="Emoji",TextSize=10,Font=Enum.Font.GothamSemibold,TextColor3=P.txt,AutoButtonColor=false,ZIndex=303,Parent=gmr}); corner(ghostEmojiBtn,5)
+    ghostCloneBtn=I("TextButton",{Size=UDim2.new(0,78,0,24),Position=UDim2.new(0,148,0,4),BackgroundColor3=S.ghostType=="clone" and P.togOn or P.btn,Text="Clone",TextSize=10,Font=Enum.Font.GothamSemibold,TextColor3=P.txt,AutoButtonColor=false,ZIndex=303,Parent=gmr}); corner(ghostCloneBtn,5)
+    ghostEmojiBtn.MouseButton1Click:Connect(function() S.ghostType="emoji"; AS.ghostType="emoji"; saveAS(); ghostEmojiBtn.BackgroundColor3=P.togOn; ghostCloneBtn.BackgroundColor3=P.btn; killGhost(); notify("Ghost: Emoji",P.acc) end)
+    ghostCloneBtn.MouseButton1Click:Connect(function() S.ghostType="clone"; AS.ghostType="clone"; saveAS(); ghostEmojiBtn.BackgroundColor3=P.btn; ghostCloneBtn.BackgroundColor3=P.togOn; killGhost(); notify("Ghost: Clone",P.acc) end)
+
+    cdiv()
+    chdr("PLAYERS / UI")
+    local hideConns={}
+    local function setCV(char,hide)
+        if not char then return end
+        for _,d in ipairs(char:GetDescendants()) do
+            if d:IsA("BasePart") then pcall(function() d.LocalTransparencyModifier=hide and 1 or 0 end) end
+        end
+    end
+    local function applyHP()
+        for _,c in ipairs(hideConns) do pcall(function() c:Disconnect() end) end
+        hideConns={}
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p~=plr then
+                setCV(p.Character,S.hidingPlayers)
+                hideConns[#hideConns+1]=p.CharacterAdded:Connect(function(ch) task.wait(0.12); setCV(ch,S.hidingPlayers) end)
+            end
+        end
+    end
+    Players.PlayerAdded:Connect(function(p2) if p2==plr then return end; p2.CharacterAdded:Connect(function(ch) task.wait(0.12); setCV(ch,S.hidingPlayers) end) end)
+    hideTog=ctog("Hide Other Players","Client-side only",S.hidingPlayers,function(v) S.hidingPlayers=v; applyHP(); saveFeatStates(); notify(v and "Players Hidden" or "Players Visible",P.acc) end)
+    ctog("Focus Mode","Slightly enhance UI visibility",S.focusMode,function(v) S.focusMode=v; AS.stFocusMode=v; applyFocusMode(v); saveFeatStates(); notify(v and "Focus Mode ON" or "Focus Mode OFF",P.focus) end)
+
+    cdiv()
+    chdr("SESSION SETTINGS")
+    ctog("Save Feature States","Save toggle states across sessions",AS.saveState,function(v) AS.saveState=v; if v then saveFeatStates() else saveAS() end; notify(v and "Save State ON" or "Save State OFF",v and P.play or P.dim) end)
+
+    cdiv()
+    chdr("UI BEHAVIOR")
+    ctog("Draggable Panel","Enable panel dragging",AS.draggable,function(v) AS.draggable=v; saveAS(); notify(v and "Drag ON" or "Drag OFF",P.acc) end)
+    local rr=cr(28)
+    local rb=I("TextButton",{Size=UDim2.new(1,0,0,24),Position=UDim2.new(0,0,0,2),BackgroundColor3=Color3.fromRGB(55,45,100),Text="Reset Panel & Toggle Button Positions",Font=Enum.Font.GothamSemibold,TextSize=10,TextColor3=P.txt,AutoButtonColor=true,ZIndex=303,Parent=rr}); corner(rb,6)
+    rb.MouseButton1Click:Connect(function()
+        main.Position=UDim2.new(0.5,-CFG.W/2,0,60); AS.mainPosXS=0.5; AS.mainPosXO=-CFG.W/2; AS.mainPosYS=0; AS.mainPosYO=60
+        uiTogBtn.Position=UDim2.new(1,-52,0,50); AS.togBtnXS=1; AS.togBtnXO=-52; AS.togBtnYS=0; AS.togBtnYO=50
+        saveAS(); notify("Positions reset",P.acc)
+    end)
+
+    cdiv()
+    chdr("CREDITS")
+    local cc=I("Frame",{Size=UDim2.new(1,-16,0,80),Position=UDim2.new(0,8,0,cy),BackgroundColor3=P.credBg,BorderSizePixel=0,ZIndex=302,Parent=cfgScroll}); cy=cy+84; corner(cc,10)
+    I("UIStroke",{Color=Color3.fromRGB(110,75,220),Thickness=1.5,Transparency=0.25,Parent=cc})
+    I("UIGradient",{Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(28,16,55)),ColorSequenceKeypoint.new(0.45,Color3.fromRGB(22,14,46)),ColorSequenceKeypoint.new(1,Color3.fromRGB(18,10,36))}),Rotation=135,Parent=cc})
+    local yb=I("Frame",{Size=UDim2.new(0,46,0,33),Position=UDim2.new(0,10,0.5,-16),BackgroundColor3=P.ytRed,BorderSizePixel=0,ZIndex=303,Parent=cc}); corner(yb,8)
+    I("UIGradient",{Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(255,60,60)),ColorSequenceKeypoint.new(1,Color3.fromRGB(200,20,20))}),Rotation=90,Parent=yb})
+    I("TextLabel",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text="▶",Font=Enum.Font.GothamBold,TextSize=22,TextColor3=Color3.new(1,1,1),ZIndex=304,Parent=yb})
+    I("TextLabel",{Size=UDim2.new(0,90,0,13),Position=UDim2.new(0,64,0,10),BackgroundTransparency=1,Text="Y O U T U B E",Font=Enum.Font.GothamSemibold,TextSize=6,TextColor3=Color3.fromRGB(200,80,80),TextXAlignment=Enum.TextXAlignment.Left,ZIndex=303,Parent=cc})
+    local nm=I("TextLabel",{Size=UDim2.new(1,-64,0,32),Position=UDim2.new(0,62,0,18),BackgroundTransparency=1,Text="SussyXDD",Font=Enum.Font.GothamBold,TextSize=22,TextColor3=Color3.fromRGB(200,185,255),ZIndex=304,Parent=cc})
+    I("UIGradient",{Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(130,200,255)),ColorSequenceKeypoint.new(0.3,Color3.fromRGB(190,140,255)),ColorSequenceKeypoint.new(0.6,Color3.fromRGB(255,150,220)),ColorSequenceKeypoint.new(1,Color3.fromRGB(255,210,100))}),Rotation=0,Parent=nm})
+    I("TextLabel",{Size=UDim2.new(1,-66,0,14),Position=UDim2.new(0,63,0,50),BackgroundTransparency=1,Text="Tool-Assisted Speedrun Script",Font=Enum.Font.Gotham,TextSize=9,TextColor3=Color3.fromRGB(140,115,190),TextXAlignment=Enum.TextXAlignment.Left,ZIndex=303,Parent=cc})
+    local vb=I("Frame",{Size=UDim2.new(0,42,0,14),Position=UDim2.new(0,10,1,-18),BackgroundColor3=Color3.fromRGB(45,35,90),BorderSizePixel=0,ZIndex=304,Parent=cc}); corner(vb,4)
+    I("TextLabel",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text="v 3.7.0",Font=Enum.Font.GothamBold,TextSize=8,TextColor3=Color3.fromRGB(180,160,255),ZIndex=305,Parent=vb})
+
+    -- ✅ ADD: "Created by AI" under the credits + simple AI logo badge
+    local aiRow = I("Frame",{
+        Size=UDim2.new(1,-16,0,44),
+        Position=UDim2.new(0,8,0,cy),
+        BackgroundTransparency=1,
+        ZIndex=302,
+        Parent=cfgScroll
+    })
+    cy = cy + 48
+
+    local aiBadge = I("Frame",{
+        Size=UDim2.new(0,44,0,24),
+        Position=UDim2.new(0,0,0,10),
+        BackgroundColor3=Color3.fromRGB(35,30,70),
+        BorderSizePixel=0,
+        ZIndex=303,
+        Parent=aiRow
+    })
+    corner(aiBadge,8)
+    I("UIStroke",{Color=Color3.fromRGB(170,140,255),Thickness=1,Transparency=0.25,Parent=aiBadge})
+    I("UIGradient",{
+        Color=ColorSequence.new({
+            ColorSequenceKeypoint.new(0,Color3.fromRGB(90,80,180)),
+            ColorSequenceKeypoint.new(1,Color3.fromRGB(255,120,220))
+        }),
+        Rotation=0,
+        Parent=aiBadge
+    })
+    I("TextLabel",{
+        Size=UDim2.new(1,0,1,0),
+        BackgroundTransparency=1,
+        Text="AI",
+        Font=Enum.Font.GothamBlack,
+        TextSize=14,
+        TextColor3=Color3.fromRGB(240,240,255),
+        ZIndex=304,
+        Parent=aiBadge
+    })
+
+    I("TextLabel",{
+        Size=UDim2.new(1,-52,0,24),
+        Position=UDim2.new(0,52,0,10),
+        BackgroundTransparency=1,
+        Text="Created by AI",
+        Font=Enum.Font.GothamSemibold,
+        TextSize=12,
+        TextColor3=Color3.fromRGB(200,185,255),
+        TextXAlignment=Enum.TextXAlignment.Left,
+        ZIndex=303,
+        Parent=aiRow
+    })
+    I("TextLabel",{
+        Size=UDim2.new(1,-52,0,14),
+        Position=UDim2.new(0,52,0,28),
+        BackgroundTransparency=1,
+        Text="17.2",
+        Font=Enum.Font.Gotham,
+        TextSize=9,
+        TextColor3=P.dim,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        ZIndex=303,
+        Parent=aiRow
+    })
+    -- ✅ END ADD
+
+    cy=cy+8
+    cfgScroll.CanvasSize=UDim2.new(0,0,0,cy)
+end
+
+-- ─── Wire Events ─────────────────────────
+local function wireEvents()
+    local td=false; local ti=nil; local ts=nil; local tp=nil; local tdid=false
+    uiTogBtn.InputBegan:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseButton1 or inp.UserInputType==Enum.UserInputType.Touch then
+            td=true; ti=inp; tdid=false; ts=inp.Position; tp=uiTogBtn.Position
+        end
+    end)
+    uiTogBtn.InputEnded:Connect(function(inp)
+        if td and inp==ti then
+            td=false; ti=nil
+            if tdid then
+                AS.togBtnXS=uiTogBtn.Position.X.Scale; AS.togBtnXO=uiTogBtn.Position.X.Offset
+                AS.togBtnYS=uiTogBtn.Position.Y.Scale; AS.togBtnYO=uiTogBtn.Position.Y.Offset
+                saveAS()
+            end
+        end
+    end)
+    UIS.InputChanged:Connect(function(inp)
+        if td and inp==ti then
+            local d=inp.Position-ts
+            if d.Magnitude>6 then tdid=true end
+            if tdid then uiTogBtn.Position=UDim2.new(tp.X.Scale,tp.X.Offset+d.X,tp.Y.Scale,tp.Y.Offset+d.Y) end
+        end
+    end)
+    uiTogBtn.MouseButton1Click:Connect(function()
+        if not tdid then
+            S.uiOpen=not S.uiOpen
+            main.Visible=S.uiOpen
+        end
+    end)
+
+    local slD=false; local slI=nil
+    local function slUpd(x)
+        local total=fc(); if total==0 then return end
+        local rel=math.clamp((x-sliderBg.AbsolutePosition.X)/sliderBg.AbsoluteSize.X,0,1)
+        local idx=math.max(1,math.ceil(rel*total))
+        seekTo(idx)
+        if S.mode=="playing" then
+            S.mode="paused"
+            applyFrame(S.frame,true)
+        elseif S.mode=="paused" then
+            applyFrame(S.frame,true)
+        end
+        updateSeekMarker()
+    end
+    sliderTouch.InputBegan:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseButton1 or inp.UserInputType==Enum.UserInputType.Touch then
+            slD=true; slI=inp; slUpd(inp.Position.X)
+        end
+    end)
+    sliderTouch.InputEnded:Connect(function(inp) if inp==slI then slD=false; slI=nil; updateSeekMarker() end end)
+    UIS.InputChanged:Connect(function(inp) if slD and inp==slI then slUpd(inp.Position.X) end end)
+
+    cfgBtn.MouseButton1Click:Connect(function()
+        S.cfgOpen=not S.cfgOpen
+        cfgPanel.Visible=S.cfgOpen
+        cfgBtn.BackgroundColor3=S.cfgOpen and P.togOn or P.btn
+    end)
+    cfgCloseBtn.MouseButton1Click:Connect(function()
+        S.cfgOpen=false
+        cfgPanel.Visible=false
+        cfgBtn.BackgroundColor3=P.btn
+    end)
+
+    recBtn.MouseButton1Click:Connect(function()
+        if S.mode=="idle" then
+            startRec()
+        elseif S.mode=="recording" then
+            stopRec()
+        elseif S.mode=="rec_paused" then
+            recResume()
+        elseif (S.mode=="paused" or S.mode=="playing") and S.recContinue then
+            local wf=fc()
+            stopPlay()
+            S.frame=wf
+            startRec()
+        end
+    end)
+
+    pauseBtn.MouseButton1Click:Connect(function()
+        if S.mode=="recording" then
+            recPause()
+        elseif S.mode=="rec_paused" then
+            recResume()
+        elseif S.mode=="playing" or S.mode=="paused" then
+            pausePlay()
+        end
+    end)
+
+    playBtn.MouseButton1Click:Connect(function()
+        if S.mode=="idle" then
+            startPlay()
+        elseif S.mode=="paused" then
+            pausePlay()
+        end
+    end)
+
+    stopBtn.MouseButton1Click:Connect(function()
+        if S.mode=="recording" or S.mode=="rec_paused" then stopRec() elseif S.mode~="idle" then stopPlay() end
+    end)
+
+    local function stepBy(n)
+        if fc()==0 then return end
+        if S.mode=="idle" then
+            seekTo(S.frame+n)
+            local s=sl()
+            if s and s.frames[S.frame] then
+                local _,h=getChar()
+                if h then h.CFrame=dCF(s.frames[S.frame].cf) end
+            end
+            restoreCharacter()
+            updateSeekMarker()
+        elseif S.mode=="paused" then
+            seekTo(S.frame+n)
+        end
+    end
+
+    s1L.MouseButton1Click:Connect(function() stepBy(-1) end)
+    s1R.MouseButton1Click:Connect(function() stepBy(1) end)
+    s10L.MouseButton1Click:Connect(function() stepBy(-10) end)
+    s10R.MouseButton1Click:Connect(function() stepBy(10) end)
+
+    spdDown.MouseButton1Click:Connect(function() S.spdI=math.max(1,S.spdI-1); saveFeatStates() end)
+    spdUp.MouseButton1Click:Connect(function() S.spdI=math.min(#CFG.SPEEDS,S.spdI+1); saveFeatStates() end)
+
+    trimFrontBtn.MouseButton1Click:Connect(trimFront)
+    trimBtn.MouseButton1Click:Connect(trimHere)
+
+    ghostBtn.MouseButton1Click:Connect(function()
+        S.ghost=not S.ghost
+        ghostBtn.BackgroundColor3=S.ghost and P.togOn or P.btn
+        if not S.ghost then killGhost() end
+        saveFeatStates()
+        notify(S.ghost and "Ghost ON" or "Ghost OFF",P.acc)
+    end)
+    loopBtn.MouseButton1Click:Connect(function()
+        S.loop=not S.loop
+        loopBtn.BackgroundColor3=S.loop and P.togOn or P.btn
+        saveFeatStates()
+        notify(S.loop and "Loop ON" or "Loop OFF",P.acc)
+    end)
+    trailBtn.MouseButton1Click:Connect(function()
+        S.trail=not S.trail
+        trailBtn.BackgroundColor3=S.trail and P.togOn or P.btn
+        if S.trail then showTrail() else clearTrail(); clearCkptParts() end
+        saveFeatStates()
+        notify(S.trail and "Trail ON" or "Trail OFF",P.acc)
+    end)
+
+    delBtn.MouseButton1Click:Connect(function()
+        if S.mode~="idle" then stopAll() end
+        local s=sl()
+        if #s.frames>0 or #(s.checkpoints or {})>0 then pushUndo() end
+        s.frames={}
+        s.checkpoints={}
+        s.checkpointNames={}
+        S.frame=0
+        markDirty(true)
+        clearCkptParts()
+        clearTrail()
+        S.trail=false
+        trailBtn.BackgroundColor3=P.btn
+        _tickKey=""
+        notify("Cleared",P.pause)
+    end)
+
+    saveBtn.MouseButton1Click:Connect(function()
+        local s=sl(); if not s then return end
+        refreshDirty()
+        if s.dirty then openSaveConfirm() else saveSlotDirect(S.slot) end
+    end)
+    confirmYes.MouseButton1Click:Connect(function() closeSaveConfirm(); saveSlotDirect(S.slot); refreshTabs() end)
+    confirmNo.MouseButton1Click:Connect(function() closeSaveConfirm(); notify("Save cancelled",P.pause) end)
+
+    loadBtn.MouseButton1Click:Connect(function()
+        local s=sl(); refreshDirty()
+        if s and s.dirty then openLoadConfirm() else doLoadSlot() end
+    end)
+    loadConfirmYes.MouseButton1Click:Connect(function() closeLoadConfirm(); doLoadSlot() end)
+    loadConfirmNo.MouseButton1Click:Connect(function() closeLoadConfirm(); notify("Load cancelled",P.pause) end)
+
+    undoBtn.MouseButton1Click:Connect(undo)
+    redoBtn.MouseButton1Click:Connect(redo)
+    addFrameBtn.MouseButton1Click:Connect(addOneFrame)
+
+    UIS.InputBegan:Connect(function(inp,gpe)
+        if gpe then return end
+        if inp.UserInputType~=Enum.UserInputType.Keyboard then return end
+        local k=inp.KeyCode
+        local ctrl=UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.RightControl)
+        local shift=UIS:IsKeyDown(Enum.KeyCode.LeftShift) or UIS:IsKeyDown(Enum.KeyCode.RightShift)
+
+        if k==Enum.KeyCode.Z and ctrl and shift then redo(); return
+        elseif k==Enum.KeyCode.Z and ctrl then undo(); return
+        elseif k==Enum.KeyCode.Y and ctrl and not S.saveConfirmOpen and not S.loadConfirmOpen then redo(); return end
+
+        if S.saveConfirmOpen then
+            if k==Enum.KeyCode.Y then closeSaveConfirm(); saveSlotDirect(S.slot); refreshTabs()
+            elseif k==Enum.KeyCode.N then closeSaveConfirm(); notify("Save cancelled",P.pause) end
+            return
+        end
+        if S.loadConfirmOpen then
+            if k==Enum.KeyCode.Y then closeLoadConfirm(); doLoadSlot()
+            elseif k==Enum.KeyCode.N then closeLoadConfirm(); notify("Load cancelled",P.pause) end
+            return
+        end
+
+        if k==Enum.KeyCode.R then
+            if S.mode=="idle" then startRec()
+            elseif S.mode=="recording" then stopRec()
+            elseif S.mode=="rec_paused" then recResume()
+            elseif (S.mode=="paused" or S.mode=="playing") and S.recContinue then local wf=fc(); stopPlay(); S.frame=wf; startRec() end
+        elseif k==Enum.KeyCode.P then
+            if S.mode=="recording" then recPause()
+            elseif S.mode=="rec_paused" then recResume()
+            elseif S.mode=="idle" then startPlay()
+            elseif S.mode=="playing" or S.mode=="paused" then pausePlay() end
+        elseif k==Enum.KeyCode.X then
+            if S.mode=="recording" or S.mode=="rec_paused" then stopRec() elseif S.mode~="idle" then stopPlay() end
+        elseif k==Enum.KeyCode.Left then
+            stepBy(shift and -10 or -1)
+        elseif k==Enum.KeyCode.Right then
+            stepBy(shift and 10 or 1)
+        elseif k==Enum.KeyCode.C and ctrl then
+            local s=sl()
+            if s and fc()>0 and S.frame>=1 and S.frame<=fc() then
+                pushUndo()
+                addCheckpointAtFrame(S.frame,false)
+                if S.trail then showTrail() else refreshCkptMarkers(); updateSeekMarker() end
+            end
+        elseif k==Enum.KeyCode.F and ctrl then
+            S.focusMode=not S.focusMode
+            applyFocusMode(S.focusMode)
+            saveFeatStates()
+            notify(S.focusMode and "Focus Mode ON" or "Focus Mode OFF",P.focus)
+        elseif k==Enum.KeyCode.B and ctrl then
+            S.cinematicBars=not S.cinematicBars
+            refreshBars()
+            saveFeatStates()
+            notify(S.cinematicBars and "Cinematic Bars ON" or "Cinematic Bars OFF",P.focus)
+        end
+    end)
+end
+
+-- ═══════════════════════════════════════════
+-- MAIN LOOP
+-- ═══════════════════════════════════════════
+local function startLoop()
+    local rpt=0
+    RunService.RenderStepped:Connect(function(dt)
+        recTick(dt)
+        playTick(dt)
+        holdTick()
+        recPausedHold()
+        ghostTick(dt)
+        addFrameTick(dt)
+
+        if S.freezeLighting then applyFrozenLighting() end
+        if S.cameraFOVLock then cam.FieldOfView=S.cameraFOV end
+
+        local total=fc()
+        local f=S.frame
+        frameLbl.Text="F:"..tostring(f).."/"..tostring(total)
+        timeLbl.Text=fmtSec(f*DT).." / "..fmtSec(total*DT)
+
+        local s2=spd()
+        spdLbl.Text=tostring(s2).."x"
+        spdLbl.TextColor3=s2==1 and P.acc or (s2>1 and P.play or P.pause)
+
+        local _,h= getChar()
+        local vel=0
+        if h then vel=h.AssemblyLinearVelocity.Magnitude end
+        statsLbl.Visible=S.showStats
+        statsLbl.Text=("v=%.2f  dt=%.3f  %s"):format(vel,dt,S.mode)
+        statsLbl.TextColor3=vel>0.2 and P.safe or P.dim
+
+        if total>0 then
+            local pct=math.clamp(f/total,0,1)
+            sliderFill.Size=UDim2.new(pct,0,1,0)
+            sliderThumb.Position=UDim2.new(0,math.floor(pct*sliderBg.AbsoluteSize.X)-7,0,-5)
+        else
+            sliderFill.Size=UDim2.new(0,0,1,0)
+            sliderThumb.Position=UDim2.new(0,-7,0,-5)
+        end
+
+        refreshSliderTicks()
+        updateSeekMarker()
+
+        if S.mode=="recording" then
+            rpt=rpt+dt
+            local a=0.5+0.5*math.sin(rpt*6)
+            recBtn.BackgroundColor3=(S.slowRec and P.slow or P.rec):Lerp(Color3.new(0.05,0.05,0.2),a)
+            recBtn.Text=S.slowRec and ("Slow"..tostring(f)) or ("REC"..tostring(f))
+        elseif S.mode=="rec_paused" then
+            rpt=rpt+dt
+            local a=0.4+0.4*math.sin(rpt*3)
+            recBtn.BackgroundColor3=P.recP:Lerp(Color3.fromRGB(80,50,10),a)
+            recBtn.Text="REC||"
+        else
+            rpt=0
+            recBtn.BackgroundColor3=S.slowRec and P.slow or P.rec
+            recBtn.Text=S.slowRec and "SlwREC" or "REC"
+        end
+
+        pauseBtn.BackgroundColor3=(S.mode=="rec_paused" or S.mode=="paused") and P.pause:Lerp(Color3.new(1,1,1),0.25) or P.pause
+        playBtn.BackgroundColor3=S.mode=="playing" and P.play:Lerp(Color3.new(1,1,1),0.15) or P.play
+
+        for i,b in ipairs(tabButtons) do
+            local sv=S.slots[i]
+            if sv then
+                b.BackgroundColor3=i==S.slot and P.tabA or P.btn
+                local w=sv.name..(sv.dirty and "*" or "")
+                if b.Text~=w then b.Text=w end
+            end
+        end
+
+        animTog.BackgroundColor3=S.anim and P.togOn or P.togOff
+        camTog.BackgroundColor3=S.camR and P.togOn or P.togOff
+        trailBtn.BackgroundColor3=S.trail and P.togOn or P.btn
+        ghostBtn.BackgroundColor3=S.ghost and P.togOn or P.btn
+        loopBtn.BackgroundColor3=S.loop and P.togOn or P.btn
+        cfgBtn.BackgroundColor3=S.cfgOpen and P.togOn or P.btn
+        trimFrontBtn.BackgroundColor3=(fc()>0 and S.frame>1) and P.btn or Color3.fromRGB(30,30,45)
+        trimBtn.BackgroundColor3=(fc()>0 and S.frame>0 and S.frame<fc()) and P.btn or Color3.fromRGB(30,30,45)
+
+        local canAdd=(S.mode=="paused" and fc()>0 and S.frame==fc() and not S.addFramePending)
+        addFrameBtn.BackgroundColor3=canAdd and P.acc or (S.addFramePending and P.pause or Color3.fromRGB(30,30,45))
+        addFrameBtn.TextColor3=(canAdd or S.addFramePending) and P.txt or P.dim
+        addFrameBtn.Text=S.addFramePending and "..." or "+1F"
+
+        if sfLbl then
+            sfLbl.Text=tostring(sf()).."x"
+            sfLbl.TextColor3=S.slowRec and P.slow or P.dim
+        end
+
+        local sl2=sl()
+        if sl2 then
+            local uc=sl2.undoStack and #sl2.undoStack or 0
+            local rc=sl2.redoStack and #sl2.redoStack or 0
+            undoInfoLbl.Text="U:"..uc.." R:"..rc
+            undoBtn.BackgroundColor3=uc>0 and P.undoOn or P.undoOff
+            undoBtn.TextColor3=uc>0 and P.txt or P.dim
+            redoBtn.BackgroundColor3=rc>0 and P.undoOn or P.undoOff
+            redoBtn.TextColor3=rc>0 and P.txt or P.dim
+        end
+
+        refreshBars()
+    end)
+end
+
+-- ═══════════════════════════════════════════
+-- CHARACTER
+-- ═══════════════════════════════════════════
+local function onCharacter(char)
+    if S.mode=="recording" or S.mode=="rec_paused" then stopRec() end
+    if S.mode=="playing" or S.mode=="paused" then stopPlay() end
+    clearAC()
+    killGhost()
+    removeSlowGravity()
+    local hum=char:WaitForChild("Humanoid",10)
+    if hum then
+        S.sWS=hum.WalkSpeed
+        S.sJP=hum.JumpPower
+        hum.Died:Connect(function()
+            if S.mode=="recording" or S.mode=="rec_paused" then stopRec() end
+            if S.mode~="idle" then stopPlay() end
+        end)
+    end
+    notify("Character ready",P.play)
+end
+
+-- ═══════════════════════════════════════════
+-- INIT
+-- ═══════════════════════════════════════════
+buildMainUI()
+buildCfgPanel()
+applyCfgSize(AS.cfgSize)
+wireEvents()
+loadAll()
+refreshTabs()
+applyFocusMode(S.focusMode)
+refreshBars()
+if S.freezeLighting then captureLighting() end
+if plr.Character then task.spawn(onCharacter,plr.Character) end
+plr.CharacterAdded:Connect(onCharacter)
+startLoop()
+notify("TAS Pro v3.7.0 ["..mapName.."] Ready",P.acc)
+
+
