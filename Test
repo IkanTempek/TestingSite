@@ -700,7 +700,8 @@ function FAV.move_down(id) for i, f in ipairs(S.favs) do if f.id == id and i < #
 
 -- ═══════════════════════════════════════
 -- AVATAR CORE
--- ═══════════════════════════════════════
+--═══════════════════════════════════════
+
 local AV = {}
 
 function AV.get_desc(uid, fresh)
@@ -748,9 +749,14 @@ function AV.apply_scales(char)
     if S.scale_head_on then d.HeadScale = S.scale_head; changed = true end
     if not changed then return true end
 
-    local applied = pcall(function()
-        hum:ApplyDescriptionResetAsync(d)
-    end)
+    local applied = false
+    if hum.ApplyDescriptionResetAsync then
+        applied = pcall(function() hum:ApplyDescriptionResetAsync(d) end)
+    elseif hum.ApplyDescriptionAsync then
+        applied = pcall(function() hum:ApplyDescriptionAsync(d) end)
+    elseif hum.ApplyDescription then
+        applied = pcall(function() hum:ApplyDescription(d) end)
+    end
     return applied
 end
 
@@ -759,18 +765,15 @@ function AV.full_apply(hum, desc)
         return false, "Humanoid or description is missing"
     end
 
-    local ok, err = pcall(function()
-        hum:ApplyDescriptionResetAsync(desc)
-    end)
-
-    if not ok then
-        ok, err = pcall(function()
-            if hum.ApplyDescriptionAsync then
-                hum:ApplyDescriptionAsync(desc)
-            else
-                hum:ApplyDescription(desc)
-            end
-        end)
+    local ok, err = false, nil
+    if hum.ApplyDescriptionResetAsync then
+        ok, err = pcall(function() hum:ApplyDescriptionResetAsync(desc) end)
+    elseif hum.ApplyDescriptionAsync then
+        ok, err = pcall(function() hum:ApplyDescriptionAsync(desc) end)
+    elseif hum.ApplyDescription then
+        ok, err = pcall(function() hum:ApplyDescription(desc) end)
+    else
+        return false, "No supported avatar apply method"
     end
 
     if not ok then
@@ -914,7 +917,7 @@ function AV.copy_player_avatar(pn)
     end; NF.push("Player not found", "err")
 end
 
-- ═══════════════════════════════════════
+--═══════════════════════════════════════
 -- OUTFIT + EMOTES
 -- ═══════════════════════════════════════
 local OUTFIT = {}
