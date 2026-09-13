@@ -700,99 +700,145 @@ function FAV.move_down(id) for i, f in ipairs(S.favs) do if f.id == id and i < #
 
 -- ═══════════════════════════════════════
 -- AVATAR CORE
---═══════════════════════════════════════
-
+-- ═══════════════════════════════════════
 local AV = {}
 
 function AV.get_desc(uid, fresh)
     if not fresh and S.cache[uid] then return S.cache[uid] end
-    local getter = plrs.GetHumanoidDescriptionFromUserIdAsync or plrs.GetHumanoidDescriptionFromUserId
-    local ok, d = pcall(getter, plrs, uid)
-    if ok and d then
-        S.cache[uid] = d
-        return d
-    end
-    return nil
+    local ok, d = pcall(plrs.GetHumanoidDescriptionFromUserId, plrs, uid)
+    if ok and d then S.cache[uid] = d; return d end; return nil
 end
+
 function AV.strip(char)
-    if not char then return end
-    local bp = lp:FindFirstChild("Backpack")
-    local tools = {}
-    for _, c in ipairs(char:GetChildren()) do
-        if c:IsA("Tool") then
-            table.insert(tools, c)
-            c.Parent = nil
+    local folder = char:FindFirstChild("NexusLocalAvatar")
+    if folder then folder:Destroy() end
+    for _, obj in ipairs(char:GetChildren()) do
+        if obj:GetAttribute("NexusLocalAccessory") then obj:Destroy() end
+    end
+    local head = char:FindFirstChild("Head")
+    local face = head and head:FindFirstChild("face")
+    if face and face:GetAttribute("NexusOriginalFace") then
+        face.Texture = face:GetAttribute("NexusOriginalFace")
+        face:SetAttribute("NexusOriginalFace", nil)
+    end
+    for _, class in ipairs({"Shirt", "Pants", "ShirtGraphic"}) do
+        local obj = char:FindFirstChildOfClass(class)
+        if obj and obj:GetAttribute("NexusOriginalTemplate") then
+            local prop = class == "Shirt" and "ShirtTemplate" or class == "Pants" and "PantsTemplate" or "Graphic"
+            obj[prop] = obj:GetAttribute("NexusOriginalTemplate")
+            obj:SetAttribute("NexusOriginalTemplate", nil)
+        elseif obj and obj:GetAttribute("NexusLocalCreated") then
+            obj:Destroy()
         end
     end
-    if bp then
-        for _, t in ipairs(bp:GetChildren()) do
-            if t:IsA("Tool") and not table.find(tools, t) then
-                table.insert(tools, t)
-            end
-        end
-    end
-    for _, t in ipairs(tools) do
-        if t and not t.Parent then t.Parent = bp or char end
+    local bc = char:FindFirstChildOfClass("BodyColors")
+    if bc and bc:GetAttribute("NexusLocalCreated") then
+        bc:Destroy()
+    elseif bc and bc:GetAttribute("NexusOriginalColors") then
+        local v = bc:GetAttribute("NexusOriginalColors"):split(",")
+        pcall(function()
+            bc.HeadColor3 = Color3.new(tonumber(v[1]), tonumber(v[2]), tonumber(v[3]))
+            bc.TorsoColor3 = Color3.new(tonumber(v[4]), tonumber(v[5]), tonumber(v[6]))
+            bc.LeftArmColor3 = Color3.new(tonumber(v[7]), tonumber(v[8]), tonumber(v[9]))
+            bc.RightArmColor3 = Color3.new(tonumber(v[10]), tonumber(v[11]), tonumber(v[12]))
+            bc.LeftLegColor3 = Color3.new(tonumber(v[13]), tonumber(v[14]), tonumber(v[15]))
+            bc.RightLegColor3 = Color3.new(tonumber(v[16]), tonumber(v[17]), tonumber(v[18]))
+        end)
+        bc:SetAttribute("NexusOriginalColors", nil)
     end
 end
 
 function AV.apply_scales(char)
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not hum then return false end
-
-    local ok, d = pcall(function() return hum:GetAppliedDescription() end)
-    if not ok or not d then return false end
-
-    local changed = false
-    if S.scale_w_on then d.WidthScale = S.scale_w; changed = true end
-    if S.scale_h_on then d.HeightScale = S.scale_h; changed = true end
-    if S.scale_head_on then d.HeadScale = S.scale_head; changed = true end
-    if not changed then return true end
-
-    local applied = false
-    if hum.ApplyDescriptionResetAsync then
-        applied = pcall(function() hum:ApplyDescriptionResetAsync(d) end)
-    elseif hum.ApplyDescriptionAsync then
-        applied = pcall(function() hum:ApplyDescriptionAsync(d) end)
-    elseif hum.ApplyDescription then
-        applied = pcall(function() hum:ApplyDescription(d) end)
+    local hum = char and char:FindFirstChildOfClass("Humanoid"); if not hum then return end
+    local folder = char:FindFirstChild("NexusLocalAvatar"); if not folder then return end
+    local values = {BodyWidthScale = S.scale_w_on and S.scale_w or nil, BodyHeightScale = S.scale_h_on and S.scale_h or nil, HeadScale = S.scale_head_on and S.scale_head or nil}
+    for name, value in pairs(values) do
+        local v = hum:FindFirstChild(name)
+        if value and v and v:IsA("NumberValue") then
+            if not v:GetAttribute("NexusOriginalScale") then v:SetAttribute("NexusOriginalScale", v.Value) end
+            v.Value = value
+        elseif v and v:IsA("NumberValue") and v:GetAttribute("NexusOriginalScale") then
+            v.Value = v:GetAttribute("NexusOriginalScale")
+            v:SetAttribute("NexusOriginalScale", nil)
+        end
     end
-    return applied
 end
 
 function AV.full_apply(hum, desc)
-    if not hum or not hum.Parent or not desc then
-        return false, "Humanoid or description is missing"
+    local char = hum and hum.Parent; if not char or not desc then return false end
+    AV.strip(char)
+    local folder = Instance.new("Folder")
+    folder.Name = "NexusLocalAvatar"
+    folder.Parent = char
+
+    local function clothing(class, property, asset)
+        if not asset or asset == 0 then return end
+        local obj = char:FindFirstChildOfClass(class)
+        if obj then
+            if not obj:GetAttribute("NexusOriginalTemplate") then obj:SetAttribute("NexusOriginalTemplate", obj[property]) end
+        else
+            obj = Instance.new(class)
+            obj.Name = "NexusLocal" .. class
+            obj:SetAttribute("NexusLocalCreated", true)
+            obj.Parent = char
+        end
+        obj[property] = "rbxassetid://" .. tostring(asset)
     end
 
-    local ok, err = false, nil
-    if hum.ApplyDescriptionResetAsync then
-        ok, err = pcall(function() hum:ApplyDescriptionResetAsync(desc) end)
-    elseif hum.ApplyDescriptionAsync then
-        ok, err = pcall(function() hum:ApplyDescriptionAsync(desc) end)
-    elseif hum.ApplyDescription then
-        ok, err = pcall(function() hum:ApplyDescription(desc) end)
-    else
-        return false, "No supported avatar apply method"
-    end
+    clothing("Shirt", "ShirtTemplate", desc.Shirt)
+    clothing("Pants", "PantsTemplate", desc.Pants)
+    clothing("ShirtGraphic", "Graphic", desc.GraphicTShirt)
 
-    if not ok then
-        return false, tostring(err)
+    local bc = char:FindFirstChildOfClass("BodyColors")
+    if not bc then
+        bc = Instance.new("BodyColors")
+        bc.Name = "NexusLocalBodyColors"
+        bc:SetAttribute("NexusLocalCreated", true)
+        bc.Parent = char
+    elseif not bc:GetAttribute("NexusOriginalColors") then
+        local function c(x) return tostring(x.R) .. "," .. tostring(x.G) .. "," .. tostring(x.B) end
+        bc:SetAttribute("NexusOriginalColors", table.concat({c(bc.HeadColor3), c(bc.TorsoColor3), c(bc.LeftArmColor3), c(bc.RightArmColor3), c(bc.LeftLegColor3), c(bc.RightLegColor3)}, ","))
     end
-    local finished = false
-    local connection
-    connection = hum.ApplyDescriptionFinished:Connect(function()
-        finished = true
-        if connection then connection:Disconnect() end
+    pcall(function()
+        bc.HeadColor3 = desc.HeadColor; bc.TorsoColor3 = desc.TorsoColor3
+        bc.LeftArmColor3 = desc.LeftArmColor3; bc.RightArmColor3 = desc.RightArmColor3
+        bc.LeftLegColor3 = desc.LeftLegColor3; bc.RightLegColor3 = desc.RightLegColor3
     end)
-    task.wait(0.1)
-    if connection then connection:Disconnect() end
+
+    local head = char:FindFirstChild("Head")
+    local face = head and head:FindFirstChild("face")
+    if face and face:IsA("Decal") and desc.Face and desc.Face ~= 0 then
+        if not face:GetAttribute("NexusOriginalFace") then face:SetAttribute("NexusOriginalFace", face.Texture) end
+        face.Texture = "rbxassetid://" .. tostring(desc.Face)
+    end
+
+    local ok, accessories = pcall(function() return desc:GetAccessories(true) end)
+    if ok and type(accessories) == "table" then
+        for _, info in ipairs(accessories) do
+            local assetId = tonumber(info.AssetId)
+            if assetId and assetId > 0 then
+                task.spawn(function()
+                    local ok2, objects = pcall(function() return game:GetObjects("rbxassetid://" .. assetId) end)
+                    if ok2 and objects then
+                        for _, obj in ipairs(objects) do
+                            local accessory = obj:IsA("Accessory") and obj or obj:FindFirstChildWhichIsA("Accessory", true)
+                            if accessory then
+                                accessory:SetAttribute("NexusLocalAccessory", true)
+                                accessory.Parent = char
+                            end
+                            if obj ~= accessory then obj:Destroy() end
+                        end
+                    end
+                end)
+            end
+        end
+    end
     return true
 end
 
 function AV.morph_effect(char)
     if not S.morph_anim or not char then return end
-    sfx("morph")
+    sfx("morph") -- [NEW] morph sound
     pcall(function()
         local hl = mk("Highlight", {
             Adornee = char, FillColor = P.pri, FillTransparency = 0,
@@ -845,16 +891,10 @@ function AV.apply(target, skip_hist)
             if #S.hist > S.max_hist then table.remove(S.hist, 1); S.hist_pos = #S.hist end
         end
         AV.morph_effect(char)
-        local applied, apply_err = AV.full_apply(hum, desc)
-        if not applied then
-            S.busy = false
-            sfx("error")
-            NF.push("Avatar apply failed: " .. tostring(apply_err):sub(1, 90), "err", 4)
-            return
-        end
+        AV.strip(char); AV.full_apply(hum, desc)
         S.cur_id = id; S.busy = false; S.total_morphs = S.total_morphs + 1; S.last_applied_time = os.time()
         AV.apply_scales(char); save()
-        sfx("success")
+        sfx("success") -- [NEW]
         NF.push("Morphed → " .. getname(id) .. " (#" .. S.total_morphs .. ")", "ok")
         if S.online_visible then task.spawn(function() FB.patch("/nexus_online/" .. tostring(lp.UserId), {avatar = id}) end) end
         if AV.on_change then AV.on_change(id) end
@@ -869,14 +909,7 @@ function AV.reset()
         local char = lp.Character; local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not char or not hum then S.busy = false; return end
         AV.morph_effect(char)
-        local applied, apply_err = AV.full_apply(hum, S.orig_desc)
-        if not applied then
-            S.busy = false
-            sfx("error")
-            NF.push("Reset failed: " .. tostring(apply_err):sub(1, 90), "err", 4)
-            return
-        end
-        S.cur_id = nil; S.busy = false; save()
+        AV.strip(char); AV.full_apply(hum, S.orig_desc); S.cur_id = nil; S.busy = false; save()
         sfx("reset"); NF.push("Restored original avatar!", "ok")
         if AV.on_change then AV.on_change(nil) end
     end)
@@ -898,8 +931,7 @@ function AV.apply_to_other(tp, aid)
     if not char or not hum then NF.push("No character", "err"); return false end
     local desc = AV.get_desc(id, true); if not desc then NF.push("Failed", "err"); return false end
     if not S.player_orig_descs[tp.UserId] then pcall(function() S.player_orig_descs[tp.UserId] = hum:GetAppliedDescription() end) end
-    local applied = AV.full_apply(hum, desc)
-    return applied == true
+    AV.strip(char); AV.full_apply(hum, desc); return true
 end
 
 function AV.apply_to_all(aid) local c = 0; for _, p in ipairs(plrs:GetPlayers()) do if p ~= lp and AV.apply_to_other(p, aid) then c = c + 1 end end; NF.push("Applied to " .. c .. " players!", "ok") end
@@ -917,7 +949,7 @@ function AV.copy_player_avatar(pn)
     end; NF.push("Player not found", "err")
 end
 
---═══════════════════════════════════════
+-- ═══════════════════════════════════════
 -- OUTFIT + EMOTES
 -- ═══════════════════════════════════════
 local OUTFIT = {}
@@ -1018,7 +1050,7 @@ function OUTFIT.remove_item(item)
             local map = {Shirt="Shirt",Pants="Pants",["T-Shirt"]="GraphicTShirt",Head="Head",Face="Face",Torso="Torso",["R.Arm"]="RightArm",["L.Arm"]="LeftArm",["R.Leg"]="RightLeg",["L.Leg"]="LeftLeg"}
             if map[item.category] then desc[map[item.category]] = 0 end
         end
-        hum:ApplyDescriptionResetAsync(desc)
+        if hum.ApplyDescriptionClientServer then hum:ApplyDescriptionClientServer(desc) else hum:ApplyDescription(desc) end
     end)
     S.outfit_removed[item.assetId] = true; NF.push("Removed: " .. item.name, "ok", 2); return true
 end
@@ -1036,7 +1068,7 @@ function OUTFIT.equip_item(item)
             local map = {Shirt="Shirt",Pants="Pants",["T-Shirt"]="GraphicTShirt",Head="Head",Face="Face",Torso="Torso",["R.Arm"]="RightArm",["L.Arm"]="LeftArm",["R.Leg"]="RightLeg",["L.Leg"]="LeftLeg"}
             if map[item.category] then desc[map[item.category]] = item.assetId end
         end
-        hum:ApplyDescriptionResetAsync(desc)
+        if hum.ApplyDescriptionClientServer then hum:ApplyDescriptionClientServer(desc) else hum:ApplyDescription(desc) end
     end)
     S.outfit_removed[item.assetId] = nil; NF.push("Equipped: " .. item.name, "ok", 2); return true
 end
